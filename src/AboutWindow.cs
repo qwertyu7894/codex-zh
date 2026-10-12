@@ -34,7 +34,7 @@ namespace CodexZhLauncher
         public AboutWindow(Window owner)
         {
             Owner = owner;
-            Title = "关于 Codex 汉化增强工具";
+            Title = "关于 " + AppInfo.BrandName;
             Width = 500;
             Height = 390;
             ResizeMode = ResizeMode.NoResize;
@@ -63,7 +63,7 @@ namespace CodexZhLauncher
             var heading = new StackPanel { VerticalAlignment = VerticalAlignment.Center };
             heading.Children.Add(new TextBlock
             {
-                Text = "Codex 汉化增强工具",
+                Text = AppInfo.BrandName,
                 Foreground = TextPrimary,
                 FontSize = 19,
                 FontWeight = FontWeights.SemiBold

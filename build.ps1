@@ -1,7 +1,13 @@
-[CmdletBinding()]
+﻿[CmdletBinding()]
 param(
     [ValidateSet('Release', 'Debug')]
-    [string]$Configuration = 'Release'
+    [string]$Configuration = 'Release',
+
+    # 成品显示名（窗口标题 / 关于窗 / 文件属性）。同一份源码可构建出不同名字的成品。
+    [string]$Brand = 'Codex 汉化增强工具',
+
+    # 输出文件名
+    [string]$OutputName = 'CodexZh-Windows-x64.exe'
 )
 
 $ErrorActionPreference = 'Stop'
@@ -11,7 +17,7 @@ $sharedDir = Join-Path $projectRoot 'shared'
 $manifestFile = Join-Path $sourceDir 'app.manifest'
 $outputDir = Join-Path $projectRoot 'dist'
 $intermediateDir = Join-Path $projectRoot 'obj'
-$outputFile = Join-Path $outputDir 'CodexZh-Windows-x64.exe'
+$outputFile = Join-Path $outputDir $OutputName
 
 # 汉化逻辑的唯一事实来源：仓库内的 localize\ 下的三个脚本。
 # 它们以嵌入资源形式打进 exe，运行时由 LocalizationRuntime 释放并调用。
@@ -82,10 +88,27 @@ foreach ($resource in $localizeResources) {
     }
 }
 
-$sourceFiles = Get-ChildItem -LiteralPath $sourceDir -Filter '*.cs' | Sort-Object Name | Select-Object -ExpandProperty FullName
+# 生成品牌常量。必须带 BOM —— csc 没有 BOM 时按 ANSI 解码，中文会乱。
+$brandFile = Join-Path $intermediateDir 'Brand.g.cs'
+$brandSource = @"
+// 本文件由 build.ps1 自动生成，请勿手工编辑。
+namespace CodexZhLauncher
+{
+    internal static partial class AppInfo
+    {
+        public const string BrandName = "$Brand";
+        public const string BrandTagline = "$Brand —— Codex Desktop 中文化（本地化副本 + asar 补丁）";
+    }
+}
+"@
+[System.IO.File]::WriteAllText($brandFile, $brandSource, (New-Object System.Text.UTF8Encoding($true)))
+Write-Host "Brand: $Brand  ->  $OutputName"
+
+$sourceFiles = @(Get-ChildItem -LiteralPath $sourceDir -Filter '*.cs' | Sort-Object Name | Select-Object -ExpandProperty FullName)
 if (-not $sourceFiles) {
     throw 'No C# source files found.'
 }
+$sourceFiles += $brandFile
 
 $compilerArgs = @(
     '/nologo',

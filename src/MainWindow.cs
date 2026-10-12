@@ -65,7 +65,7 @@ namespace CodexZhLauncher
 
         public MainWindow()
         {
-            Title = "Codex 汉化增强工具";
+            Title = AppInfo.BrandName;
             Width = 820;
             Height = 620;
             MinWidth = 680;
@@ -147,7 +147,7 @@ namespace CodexZhLauncher
 
             var title = new TextBlock
             {
-                Text = "Codex 汉化增强工具",
+                Text = AppInfo.BrandName,
                 Foreground = TextPrimary,
                 FontSize = 21,
                 FontWeight = FontWeights.SemiBold,

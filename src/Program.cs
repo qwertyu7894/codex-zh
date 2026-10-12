@@ -3,10 +3,10 @@ using System.Runtime.InteropServices;
 using System.Text;
 using System.Windows;
 
-[assembly: System.Reflection.AssemblyTitle("Codex 汉化增强工具")]
-[assembly: System.Reflection.AssemblyDescription("Codex Desktop 中文界面与原生菜单运行时增强工具")]
+[assembly: System.Reflection.AssemblyTitle(CodexZhLauncher.AppInfo.BrandName)]
+[assembly: System.Reflection.AssemblyDescription(CodexZhLauncher.AppInfo.BrandTagline)]
 [assembly: System.Reflection.AssemblyCompany("Codex Localization Enhancer Community")]
-[assembly: System.Reflection.AssemblyProduct("Codex 汉化增强工具")]
+[assembly: System.Reflection.AssemblyProduct(CodexZhLauncher.AppInfo.BrandName)]
 [assembly: System.Reflection.AssemblyCopyright("Copyright 2026")]
 [assembly: System.Reflection.AssemblyVersion("1.0.0.0")]
 [assembly: System.Reflection.AssemblyFileVersion("1.0.0.0")]
