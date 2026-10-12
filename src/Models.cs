@@ -11,6 +11,14 @@ namespace CodexZhLauncher
         public string ExecutablePath;
         public string AppUserModelId;
 
+        /// <summary>
+        /// 源安装（商店包）**已经升级到**的版本号。
+        /// 仅当本地化副本落后于源安装时才有值 —— 非空即表示
+        /// "你手上的中文版还是旧版 Codex，重打一次才能跟上"。
+        /// 两侧版本一律取自 App 自带的 resources\owl-app.ini（见 CodexDiscovery.ReadAppVersion）。
+        /// </summary>
+        public string StaleSourceVersion;
+
         public bool IsStorePackage
         {
             get { return !String.IsNullOrWhiteSpace(AppUserModelId); }

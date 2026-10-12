@@ -19,7 +19,7 @@ Codex / ChatGPT 桌面端中文化工具。**自研，零第三方依赖，不�
 |---|---|---|
 | 界面 | App 把 `enable_i18n` 默认写死为 `false` | 界面全英文，`localeOverride` 设了也没用 |
 | 菜单 | MSIX 清单只声明 `<Resource Language="en-US"/>`，`app.getLocale()` 被顶成 `en-US` | 原生菜单全英文，传 `--lang=zh-CN` 也无效 |
-| （旧方案失效） | App 新构建关掉了 Electron fuse `EnableNodeCliInspectArguments` | 上一代工具靠 `--inspect` 注入主进程改菜单，**永久失效** |
+| （旧方案） | App 新构建（`26.1007.*` 起）把 Electron fuse `EnableNodeCliInspectArguments` 置 0 | 上一代工具靠 `--inspect` 注入主进程改菜单，**在新版 Codex 上不可用**（旧版仍可用，故表现为部分机器可用） |
 
 本工具用两条干净的路解决前两层，**完全不依赖注入**：
 

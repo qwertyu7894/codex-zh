@@ -435,7 +435,14 @@ namespace CodexZhLauncher
                 missingPollCount = 0;
                 if (currentInstall != null)
                 {
-                    AppendLog("已检测到 " + currentInstall.DisplayName + "，包版本 " + currentInstall.Version + "。", Accent);
+                    // "版本"取的是副本 resources\owl-app.ini 的 AppVersion，不是 Appx 包编号，
+                    // 所以别写成"包版本"。
+                    AppendLog("已检测到 " + currentInstall.DisplayName + "，版本 " + currentInstall.Version + "。", Accent);
+                    if (!String.IsNullOrWhiteSpace(currentInstall.StaleSourceVersion))
+                    {
+                        AppendLog("源安装已升级到 " + currentInstall.StaleSourceVersion + "，本地化副本仍是 "
+                            + currentInstall.Version + "。点「汉化并启动」会重新复制并打补丁。", Warning);
+                    }
                 }
                 else
                 {
@@ -543,10 +550,24 @@ namespace CodexZhLauncher
             shutdownFailureDetail = null;
             lastLaunchReport = null;
             SetRestartButtonMode(false);
-            var source = currentInstall.Kind == "Microsoft Store"
-                ? "Microsoft Store · 包版本 " + currentInstall.Version
-                : currentInstall.DisplayName;
-            SetStatus("已就绪", source, Success);
+            if (!String.IsNullOrWhiteSpace(currentInstall.StaleSourceVersion))
+            {
+                // 副本是"快照"：商店包升级后它不会跟着变 —— 汉化保住了，但 Codex 停在旧版。
+                // 不在这里点明，用户会一直跑旧版而毫无察觉。
+                SetStatus(
+                    "副本已过期",
+                    "源安装已升级到 " + currentInstall.StaleSourceVersion
+                        + "，本地化副本仍是 " + currentInstall.Version
+                        + " —— 点「汉化并启动」即可跟上",
+                    Warning);
+            }
+            else
+            {
+                var source = currentInstall.Kind == "Microsoft Store"
+                    ? "Microsoft Store · 包版本 " + currentInstall.Version
+                    : currentInstall.DisplayName + " · " + currentInstall.Version;
+                SetStatus("已就绪", source, Success);
+            }
             primaryLabel.Text = "汉化并启动";
             primaryButton.IsEnabled = true;
         }
@@ -584,6 +605,18 @@ namespace CodexZhLauncher
             {
                 SetBusy(false, null, null);
                 UpdatePresentation();
+            }
+
+            // 若刚才是"副本已过期"状态下重打的，副本已被刷新（脚本会删旧副本重拷），
+            // 必须**重新探测**：否则 currentInstall 里缓存的 Version / StaleSourceVersion
+            // 仍是旧值 —— 用户按提示修好了，界面却还挂着「副本已过期」，连版本号都是错的。
+            //
+            // 刻意放在 finally 之外：本项目 csc 未指定 /langversion，按 C# 5 编译，
+            // 而 C# 5 不允许在 finally 子句里 await（CS1984）。
+            if (lastLaunchReport != null && lastLaunchReport.Complete
+                && !String.IsNullOrWhiteSpace(currentInstall.StaleSourceVersion))
+            {
+                await DetectInstallAsync();
             }
         }
 

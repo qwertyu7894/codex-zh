@@ -14,7 +14,9 @@ namespace CodexZhLauncher
     ///
     /// 与上一代实现的根本区别：
     ///   旧实现靠 `--inspect` 连上 Electron 主进程、注入 JS 改写原生菜单。
-    ///   新版 Codex 关掉了 fuse EnableNodeCliInspectArguments，这条路已永久失效；
+    ///   新版 Codex 关掉了 fuse EnableNodeCliInspectArguments，这条路在新版上不可用；
+    ///   注意 fuse 是编译期属性、绑 Codex 版本 —— 旧版 Codex 上仍可用，
+    ///   所以不是"永久失效"，而是看客户端有没有让 Codex 升级。
     ///   同时 MSIX 清单只声明 en-US，app.getLocale() 被顶死成英文。
     ///
     /// 现方案（两条干净的路，完全不依赖注入）：

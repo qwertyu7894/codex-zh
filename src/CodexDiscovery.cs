@@ -29,7 +29,14 @@ namespace CodexZhLauncher
             //    "正在运行 / 关闭并重启" 那套流程无需任何改动即可正常工作。
             //    注意：只在【没有手动指定】时才生效。
             var localized = DetectLocalizedCopy();
-            if (localized != null) return localized;
+            if (localized != null)
+            {
+                // 返回前顺手看一眼源安装有没有升级过 —— 副本是"快照"，
+                // 商店包升级后副本会**永远停在旧版本**，而界面看起来一切正常。
+                // 不主动提醒的话，用户会一直跑旧版 Codex 且毫无察觉。
+                await MarkStaleCopyAsync(localized);
+                return localized;
+            }
 
             // ③ 再往下才是自动探测
             var store = await DetectStorePackageAsync();
@@ -61,27 +68,105 @@ namespace CodexZhLauncher
             }
         }
 
-        private static string ReadLocalizedVersion(string executable)
+        /// <summary>
+        /// 读 App 自带的 resources\owl-app.ini 里的 AppVersion。
+        ///
+        /// 副本与商店包**必须都用这一个来源**比较：商店包**目录名**里的是另一套编号
+        /// （如 26.1007.2314.0），与 owl-app.ini 的（26.1007.21434）格式不同，
+        /// 混着比会永远不相等、必然误报"副本已过期"。
+        /// </summary>
+        private static string ReadAppVersion(string appDir)
         {
+            if (String.IsNullOrWhiteSpace(appDir)) return null;
             try
             {
-                // owl-app.ini 里的 AppVersion 比 exe 的 FileVersion 更贴近真实版本
-                var ini = Path.Combine(LocalizationRuntime.LocalizedAppDir, "resources", "owl-app.ini");
-                if (File.Exists(ini))
+                var ini = Path.Combine(appDir, "resources", "owl-app.ini");
+                if (!File.Exists(ini)) return null;
+                foreach (var line in File.ReadAllLines(ini))
                 {
-                    foreach (var line in File.ReadAllLines(ini))
+                    var trimmed = line.Trim();
+                    if (trimmed.StartsWith("AppVersion", StringComparison.OrdinalIgnoreCase))
                     {
-                        var trimmed = line.Trim();
-                        if (trimmed.StartsWith("AppVersion", StringComparison.OrdinalIgnoreCase))
-                        {
-                            var parts = trimmed.Split(new[] { '=' }, 2);
-                            if (parts.Length == 2 && !String.IsNullOrWhiteSpace(parts[1]))
-                                return parts[1].Trim();
-                        }
+                        var parts = trimmed.Split(new[] { '=' }, 2);
+                        if (parts.Length == 2 && !String.IsNullOrWhiteSpace(parts[1]))
+                            return parts[1].Trim();
                     }
                 }
             }
             catch { }
+            return null;
+        }
+
+        /// <summary>
+        /// 本地化副本是否落后于源安装。落后就把源安装版本记进 StaleSourceVersion。
+        /// 任何失败都只是"不提示"，绝不影响检测主流程。
+        /// </summary>
+        private static async Task MarkStaleCopyAsync(CodexInstall localized)
+        {
+            try
+            {
+                // 先确认"副本确实是从某个商店包拷来的"。
+                // 副本也可能来自官网版 / 便携版（目录不可写时脚本同样走 store-copy 模式），
+                // 那时机器上若恰好也装了商店包，拿它比对就是**误报**。
+                // 宁可漏报，不可误报。
+                if (!CopyCameFromStorePackage()) return;
+
+                var store = await DetectStorePackageAsync();
+                if (store == null || String.IsNullOrWhiteSpace(store.ExecutablePath)) return;
+
+                var copyVersion = ReadAppVersion(Path.GetDirectoryName(localized.ExecutablePath));
+                var storeVersion = ReadAppVersion(Path.GetDirectoryName(store.ExecutablePath));
+
+                // 任一侧读不到就**不判断** —— 宁可漏报，也不要拿残缺信息误报。
+                if (String.IsNullOrWhiteSpace(copyVersion) || String.IsNullOrWhiteSpace(storeVersion)) return;
+                if (String.Equals(copyVersion, storeVersion, StringComparison.Ordinal)) return;
+
+                localized.StaleSourceVersion = storeVersion;
+                AppLog.Write("copy.stale copy=" + copyVersion + " source=" + storeVersion);
+            }
+            catch (Exception ex)
+            {
+                AppLog.Write("stale.probe.failed " + ex.Message);
+            }
+        }
+
+        /// <summary>
+        /// 副本是不是从商店包拷来的。
+        ///
+        /// 只看 state.json：mode 必须是 store-copy，且 sourcePath 落在 WindowsApps 下。
+        /// 商店包升级后目录名会带上新版本号，所以**不能**拿 sourcePath 直接跟当前
+        /// 商店包路径比（必然不相等）—— 只校验它"是不是 WindowsApps 里的包"。
+        /// 读不到 state.json 就返回 false：宁可漏报，也不对着错误的源安装误报。
+        /// </summary>
+        private static bool CopyCameFromStorePackage()
+        {
+            try
+            {
+                var path = Path.Combine(LocalizationRuntime.LocalizedRoot, "state.json");
+                if (!File.Exists(path)) return false;
+
+                var values = new JavaScriptSerializer().Deserialize<Dictionary<string, object>>(
+                    File.ReadAllText(path, System.Text.Encoding.UTF8));
+                if (values == null) return false;
+
+                var mode = GetString(values, "mode");
+                var sourcePath = GetString(values, "sourcePath");
+                if (!String.Equals(mode, "store-copy", StringComparison.OrdinalIgnoreCase)) return false;
+                if (String.IsNullOrWhiteSpace(sourcePath)) return false;
+
+                return sourcePath.IndexOf(@"\WindowsApps\", StringComparison.OrdinalIgnoreCase) >= 0;
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
+        private static string ReadLocalizedVersion(string executable)
+        {
+            // owl-app.ini 里的 AppVersion 比 exe 的 FileVersion 更贴近真实版本
+            var version = ReadAppVersion(Path.GetDirectoryName(executable));
+            if (!String.IsNullOrWhiteSpace(version)) return version;
 
             try
             {
@@ -129,9 +214,12 @@ namespace CodexZhLauncher
             var command =
                 "$p = Get-AppxPackage -Name '" + PackageName + "' | Sort-Object Version -Descending | Select-Object -First 1; " +
                 "if ($null -ne $p) { [pscustomobject]@{ Version=$p.Version.ToString(); PackageFamilyName=$p.PackageFamilyName; InstallLocation=$p.InstallLocation } | ConvertTo-Json -Compress }";
+            // 带超时：Get-AppxPackage 在 AppXSvc / Store 繁忙时会长时间不返回，
+            // 而调用方是 await 它的 —— 没有兜底会把界面永久卡在「正在检测 Codex」。
             var result = await ProcessRunner.RunAsync(
                 "powershell.exe",
-                "-NoProfile -NonInteractive -ExecutionPolicy Bypass -Command " + ProcessRunner.QuoteArgument(command));
+                "-NoProfile -NonInteractive -ExecutionPolicy Bypass -Command " + ProcessRunner.QuoteArgument(command),
+                TimeSpan.FromSeconds(15));
 
             if (!result.Success || String.IsNullOrWhiteSpace(result.Output)) return null;
 

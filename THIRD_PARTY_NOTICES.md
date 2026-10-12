@@ -64,9 +64,15 @@ copies or substantial portions of the Software.
 ## 本分支与上游的技术关系
 
 上游 v0.7.7 依赖 `--inspect` 注入 Electron 主进程改写原生菜单。
-该通道在当前 Codex 桌面端上已被 Electron fuse `EnableNodeCliInspectArguments=0` 关闭，
-**永久失效**。本分支改用磁盘补丁方案（本地化副本 + `app.asar` 原地改写 + 完整性哈希同步），
-不依赖任何运行时注入。详见 `README.md`。
+**新版** Codex 桌面端（`26.1007.*` 起）已把 Electron fuse
+`EnableNodeCliInspectArguments` 置 0，该通道在新版上不可用。
+
+**但这不等于"永久失效"** —— fuse 是**编译期烧进二进制**的属性，绑的是 **Codex 的版本**，
+不是时间：仍在跑旧版 Codex 的机器上，这条路**照常工作**。所以真实表现是
+"**部分机器可用、部分机器不可用**"，取决于客户端有没有让 Codex 自动升级。
+
+本分支改用磁盘补丁方案（本地化副本 + `app.asar` 原地改写 + 完整性哈希同步），
+不依赖任何运行时注入，因此不受 Codex 版本影响。详见 `README.md`。
 
 `shared/` 目录下的注入脚本在本分支中**已不再使用**，
 保留仅为不破坏上游原有的构建与自检流程。
