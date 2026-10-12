@@ -1,0 +1,537 @@
+﻿#Requires -Version 5.1
+<#
+.SYNOPSIS
+  Codex 桌面版本地化（自研，零依赖）
+
+.DESCRIPTION
+  做两件事，仅此两件：
+
+    1) 让界面变中文 —— 把 app.asar 内 `enable_i18n`,!1 这个**默认值**
+       原地改成 `!0`（等长 1 字节）。改的是默认值，不是运行时状态，
+       所以一次生效、永久有效，不需要注入、不需要每次重启重打。
+
+    2) 让菜单变中文 —— 保证 %USERPROFILE%\.codex\config.toml 里
+       [desktop] localeOverride = "zh-CN" 存在。
+       MSIX 包只声明 en-US 资源语言，会把 app.getLocale() 顶成 en-US，
+       导致原生菜单永远英文；脱离 MSIX 运行（复制副本）后此限制消失。
+
+  为什么要复制副本：Microsoft Store 版装在
+  C:\Program Files\WindowsApps\ 下，受 ACL 保护且包签名校验，
+  无法原地改写。复制到用户可写目录后打补丁，绝不动原件。
+
+  明确不做的事：不联网、不下载、不写注册表、不装服务/计划任务、
+  不读凭据、不修改 WindowsApps 里的任何文件。
+
+.PARAMETER Target
+  直接指定一个 app 目录（含 resources\app.asar 与 ChatGPT.exe）。
+  用于对已有的本地化副本打补丁，或对官网可写版直接打补丁。
+
+.PARAMETER DryRun
+  只检测并报告会改什么，不写入。
+
+.EXAMPLE
+  .\CodexZh.ps1 -Status
+  .\CodexZh.ps1 -Install -DryRun
+  .\CodexZh.ps1 -Install
+  .\CodexZh.ps1 -Launch
+#>
+[CmdletBinding()]
+param(
+    [switch]$Status,
+    [switch]$Install,
+    [switch]$Launch,
+    [switch]$DryRun,
+    [string]$Language = 'zh-CN',
+    [string]$Target,
+    [string]$Root,
+    [switch]$Quiet          # GUI 调用时用：抑制"用法"帮助块，只留状态与结果
+)
+
+$ErrorActionPreference = 'Stop'
+$scriptDir = $PSScriptRoot
+
+. (Join-Path $scriptDir 'AsarInPlace.ps1')
+. (Join-Path $scriptDir 'Rules.ps1')
+
+function Write-Info { param([string]$m) Write-Host "[信息] $m" -ForegroundColor Cyan }
+function Write-Ok   { param([string]$m) Write-Host "[成功] $m" -ForegroundColor Green }
+function Write-Warn { param([string]$m) Write-Host "[警告] $m" -ForegroundColor Yellow }
+function Write-Err  { param([string]$m) Write-Host "[错误] $m" -ForegroundColor Red }
+
+$userProfile = [Environment]::GetFolderPath('UserProfile')
+if ([string]::IsNullOrWhiteSpace($userProfile)) { $userProfile = $env:USERPROFILE }
+
+if ([string]::IsNullOrWhiteSpace($Root)) {
+    $Root = Join-Path $userProfile '.codex\codex-zh'
+}
+$Root         = [System.IO.Path]::GetFullPath($Root)
+$configJson   = Join-Path $Root 'state.json'
+$logFile      = Join-Path $Root 'codex-zh.log'
+$codexToml    = Join-Path $userProfile '.codex\config.toml'
+
+function Write-Log {
+    param([string]$m)
+    try {
+        $dir = Split-Path $logFile -Parent
+        if (-not (Test-Path -LiteralPath $dir)) { New-Item -ItemType Directory -Path $dir -Force | Out-Null }
+        Add-Content -LiteralPath $logFile -Value ("[{0}] {1}" -f (Get-Date -Format 'yyyy-MM-dd HH:mm:ss'), $m) -Encoding UTF8
+    } catch {}
+}
+
+# ---------------------------------------------------------------- 安装探测
+
+function Find-CodexInstall {
+    param([string]$Override)
+
+    if ($Override) {
+        foreach ($p in @($Override, (Join-Path $Override 'app'))) {
+            if ((Test-Path -LiteralPath (Join-Path $p 'resources\app.asar')) -and
+                ((Test-Path -LiteralPath (Join-Path $p 'ChatGPT.exe')) -or (Test-Path -LiteralPath (Join-Path $p 'Codex.exe')))) {
+                $full = (Get-Item -LiteralPath $p).FullName
+                $kind = if ($full -like '*\WindowsApps\*') { 'store' } else { 'writable' }
+                return @{ AppDir = $full; Kind = $kind }
+            }
+        }
+        return $null
+    }
+
+    # Microsoft Store / MSIX
+    try {
+        $pkg = Get-AppxPackage -ErrorAction SilentlyContinue |
+               Where-Object { $_.Name -match 'OpenAI.*Codex|^Codex$|^ChatGPT$' } |
+               Select-Object -First 1
+        if ($pkg -and $pkg.InstallLocation) {
+            foreach ($p in @((Join-Path $pkg.InstallLocation 'app'), $pkg.InstallLocation)) {
+                if ((Test-Path -LiteralPath (Join-Path $p 'resources\app.asar')) -and (Test-Path -LiteralPath (Join-Path $p 'ChatGPT.exe'))) {
+                    return @{ AppDir = (Get-Item -LiteralPath $p).FullName; Kind = 'store'; Package = $pkg }
+                }
+            }
+        }
+    } catch {}
+
+    # 官网安装版（注册表）
+    try {
+        $roots = @('HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*',
+                   'HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*',
+                   'HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*')
+        foreach ($r in $roots) {
+            Get-ItemProperty $r -ErrorAction SilentlyContinue |
+                Where-Object { $_.DisplayName -match 'Codex|ChatGPT' -and $_.InstallLocation } |
+                ForEach-Object {
+                    foreach ($p in @($_.InstallLocation, (Join-Path $_.InstallLocation 'app'))) {
+                        if ((Test-Path -LiteralPath (Join-Path $p 'resources\app.asar')) -and (Test-Path -LiteralPath (Join-Path $p 'ChatGPT.exe'))) {
+                            return @{ AppDir = (Get-Item -LiteralPath $p).FullName; Kind = 'writable' }
+                        }
+                    }
+                }
+        }
+    } catch {}
+
+    return $null
+}
+
+function Get-CodexVersion {
+    param([string]$AppDir)
+    $leaf = Split-Path (Split-Path $AppDir -Parent) -Leaf
+    if ($leaf -match 'OpenAI\.Codex_([0-9][0-9.]*)') { return $Matches[1] }
+    $ini = Join-Path $AppDir 'resources\owl-app.ini'
+    if (Test-Path -LiteralPath $ini) {
+        $line = Select-String -LiteralPath $ini -Pattern '^\s*AppVersion\s*=\s*(.+)$' -ErrorAction SilentlyContinue
+        if ($line) { return $line.Matches[0].Groups[1].Value.Trim() }
+    }
+    return 'unknown'
+}
+
+function Test-DirWritable {
+    param([string]$Dir)
+    try {
+        $probe = Join-Path $Dir ('.wtest-' + [guid]::NewGuid().ToString('N'))
+        [System.IO.File]::WriteAllText($probe, 'x')
+        Remove-Item -LiteralPath $probe -Force
+        return $true
+    } catch { return $false }
+}
+
+function Copy-TreeBytes {
+    <# 逐字节递归复制。不用 Copy-Item：WindowsApps 里有重解析点/EFS，字节流最稳。 #>
+    param([string]$Src, [string]$Dst)
+    if (-not (Test-Path -LiteralPath $Dst)) { New-Item -ItemType Directory -Path $Dst -Force | Out-Null }
+    foreach ($dir in [System.IO.Directory]::EnumerateDirectories($Src)) {
+        Copy-TreeBytes -Src $dir -Dst (Join-Path $Dst ([System.IO.Path]::GetFileName($dir)))
+    }
+    foreach ($file in [System.IO.Directory]::EnumerateFiles($Src)) {
+        $target = Join-Path $Dst ([System.IO.Path]::GetFileName($file))
+        $in = [System.IO.File]::OpenRead($file)
+        try {
+            $out = [System.IO.File]::Create($target)
+            try {
+                $buf = New-Object byte[] (8MB)
+                while (($r = $in.Read($buf, 0, $buf.Length)) -gt 0) { $out.Write($buf, 0, $r) }
+            } finally { $out.Dispose() }
+        } finally { $in.Dispose() }
+    }
+}
+
+# ---------------------------------------------------------------- 配置写入
+
+function Set-LocaleOverride {
+    <#
+      确保 config.toml 的 [desktop] 段里有 localeOverride。
+      这是唯一一处"长度可以变化"的改动 —— 因为改的是配置文件，不是 asar。
+    #>
+    param(
+        [Parameter(Mandatory)][string]$Path,
+        [Parameter(Mandatory)][string]$Locale,
+        [switch]$Apply
+    )
+
+    $line = 'localeOverride = "' + $Locale + '"'
+    $lines = @()
+    if (Test-Path -LiteralPath $Path) {
+        $lines = @(Get-Content -LiteralPath $Path -Encoding UTF8)
+    }
+
+    $sectionStart = -1
+    $sectionEnd   = $lines.Count
+    $existing     = -1
+
+    for ($i = 0; $i -lt $lines.Count; $i++) {
+        if ($lines[$i] -match '^\s*\[desktop\]\s*$') {
+            $sectionStart = $i
+            for ($j = $i + 1; $j -lt $lines.Count; $j++) {
+                if ($lines[$j] -match '^\s*\[') { $sectionEnd = $j; break }
+            }
+            break
+        }
+    }
+    if ($sectionStart -ge 0) {
+        for ($i = $sectionStart + 1; $i -lt $sectionEnd; $i++) {
+            if ($lines[$i] -match '^\s*localeOverride\s*=') { $existing = $i; break }
+        }
+    }
+
+    if ($existing -ge 0) {
+        if ($lines[$existing] -eq $line) { return @{ Changed = $false; Reason = 'already-set' } }
+        if ($Apply) {
+            $lines[$existing] = $line
+            [System.IO.File]::WriteAllLines($Path, $lines, (New-Object System.Text.UTF8Encoding($false)))
+        }
+        return @{ Changed = $true; Reason = 'updated' }
+    }
+
+    if ($sectionStart -ge 0) {
+        if ($Apply) {
+            $out = @()
+            $out += $lines[0..$sectionStart]
+            $out += $line
+            if ($sectionStart + 1 -le $lines.Count - 1) { $out += $lines[($sectionStart + 1)..($lines.Count - 1)] }
+            [System.IO.File]::WriteAllLines($Path, $out, (New-Object System.Text.UTF8Encoding($false)))
+        }
+        return @{ Changed = $true; Reason = 'inserted-into-desktop' }
+    }
+
+    if ($Apply) {
+        $out = @($lines) + @('', '[desktop]', $line)
+        [System.IO.File]::WriteAllLines($Path, $out, (New-Object System.Text.UTF8Encoding($false)))
+    }
+    return @{ Changed = $true; Reason = 'appended-desktop-section' }
+}
+
+# ---------------------------------------------------------------- 打补丁
+
+function Invoke-PatchPass {
+    param(
+        [Parameter(Mandatory)][string]$AsarPath,
+        [switch]$Apply
+    )
+
+    $info  = Read-AsarHeaderInfo -AsarPath $AsarPath
+    $rules = Get-CodexPatchRules
+    $results = New-Object System.Collections.ArrayList
+    $criticalMiss = 0
+
+    Write-Info ("asar 头部 {0:N0} 字节，数据区起点 {1:N0}" -f $info.JsonLen, $info.DataOffset)
+
+    foreach ($rule in $rules) {
+        $entries = Get-AsarEntriesInScope -HeaderInfo $info -Scope $rule.Scope -Ext $rule.Ext
+        Write-Info ("规则 [{0}] 在 {1} 下找到 {2} 个候选文件" -f $rule.Id, $rule.Scope, $entries.Count)
+
+        $hitFiles = New-Object System.Collections.ArrayList
+        foreach ($e in $entries) {
+            if (Test-AsarEntryContains -AsarPath $AsarPath -DataOffset $info.DataOffset `
+                                       -Offset $e.Offset -Size $e.Size -Needle $rule.From) {
+                [void]$hitFiles.Add($e)
+            }
+        }
+
+        if ($hitFiles.Count -eq 0) {
+            # 源串不存在，可能是"已经打过补丁"（重复运行 -Install 的正常情形），
+            # 而不是"App 结构变了"。两者必须区分，否则会误报关键补丁失败。
+            $alreadyPatched = $false
+            foreach ($e in $entries) {
+                if (Test-AsarEntryContains -AsarPath $AsarPath -DataOffset $info.DataOffset `
+                                           -Offset $e.Offset -Size $e.Size -Needle $rule.To) {
+                    $alreadyPatched = $true
+                    break
+                }
+            }
+            if ($alreadyPatched) {
+                Write-Info ("    已打过补丁，跳过：{0}" -f $rule.Desc)
+                [void]$results.Add(@{ Id = $rule.Id; Desc = $rule.Desc; Critical = $rule.Critical; Status = 'already-patched'; Files = @() })
+            } else {
+                Write-Warn ("    未命中：{0}" -f $rule.Desc)
+                if ($rule.Critical) { $criticalMiss++ }
+                [void]$results.Add(@{ Id = $rule.Id; Desc = $rule.Desc; Critical = $rule.Critical; Status = 'miss'; Files = @() })
+            }
+            continue
+        }
+
+        $totalHits = 0
+        $done = New-Object System.Collections.ArrayList
+        foreach ($e in $hitFiles) {
+            $r = Invoke-AsarInPlacePatch -AsarPath $AsarPath -RelPath $e.Path `
+                                         -Replacements @(@{ From = $rule.From; To = $rule.To; Desc = $rule.Desc }) `
+                                         -Apply:$Apply
+            if ($r.Status -eq 'ok') {
+                $totalHits += $r.Hits
+                [void]$done.Add(("{0} (命中 {1}, 完整性哈希更新 {2})" -f $e.Path, $r.Hits, $r.IntegrityUpdated))
+            } elseif ($r.Status -eq 'length-mismatch') {
+                Write-Err ("    拒绝写入：替换前后长度不一致 @ {0}" -f $e.Path)
+            } else {
+                Write-Warn ("    {0} @ {1}" -f $r.Status, $e.Path)
+            }
+        }
+
+        if ($totalHits -ne $rule.Expect) {
+            Write-Warn ("    命中 {0} 处，预期 {1} 处 —— App 结构可能已变化，请人工确认后再上线" -f $totalHits, $rule.Expect)
+        } else {
+            Write-Ok ("    命中 {0} 处：{1}" -f $totalHits, $rule.Desc)
+        }
+        foreach ($d in $done) { Write-Info ("      " + $d) }
+
+        [void]$results.Add(@{ Id = $rule.Id; Desc = $rule.Desc; Critical = $rule.Critical; Status = 'ok'; Hits = $totalHits; Files = @($done) })
+    }
+
+    return @{ Results = $results; CriticalMiss = $criticalMiss }
+}
+
+# ---------------------------------------------------------------- 子命令
+
+function Show-Status {
+    param($Found, [string]$TargetApp)
+
+    $state = $null
+    if (Test-Path -LiteralPath $configJson) {
+        try { $state = Get-Content -LiteralPath $configJson -Raw -Encoding UTF8 | ConvertFrom-Json } catch {}
+    }
+
+    Write-Host ''
+    Write-Host '=== Codex 本地化状态 ===' -ForegroundColor White
+    if ($Found) {
+        Write-Host ("  源安装      : {0}" -f $Found.AppDir)
+        Write-Host ("  形态        : {0}" -f $Found.Kind)
+        Write-Host ("  版本        : {0}" -f (Get-CodexVersion -AppDir $Found.AppDir))
+    } else {
+        Write-Host '  源安装      : 未检测到' -ForegroundColor Yellow
+    }
+    if ($TargetApp) {
+        $patched = Test-Path -LiteralPath (Join-Path $TargetApp 'resources\app.asar')
+        Write-Host ("  本地化副本  : {0}" -f $TargetApp)
+        Write-Host ("  副本可用    : {0}" -f $patched)
+    }
+    if ($state) {
+        Write-Host ("  上次补丁    : {0} (版本 {1})" -f $state.patchedAt, $state.version)
+    }
+    if (Test-Path -LiteralPath $codexToml) {
+        $hit = Select-String -LiteralPath $codexToml -Pattern '^\s*localeOverride\s*=\s*"?([^"\s]+)"?' -ErrorAction SilentlyContinue
+        if ($hit) { Write-Host ("  localeOverride: {0}" -f $hit.Matches[0].Groups[1].Value) }
+        else { Write-Host '  localeOverride: 未设置' -ForegroundColor Yellow }
+    } else {
+        Write-Host ("  config.toml : 不存在（{0}）" -f $codexToml) -ForegroundColor Yellow
+    }
+    Write-Host ''
+
+    # ---- 供 GUI 解析的结构化状态行 ----
+    # DETECT|<可执行路径>|<形态>|<版本>
+    # STATE|<ok|warn|bad>|<标题>|<说明>
+    $version = 'unknown'
+    if ($Found) { $version = Get-CodexVersion -AppDir $Found.AppDir }
+    $detectPath = if ($Found) { $Found.AppDir } else { '' }
+    $detectKind = if ($Found) { $Found.Kind } else { '' }
+    Write-Host ("DETECT|{0}|{1}|{2}" -f $detectPath, $detectKind, $version)
+
+    $level = 'ok'
+    $stTitle = '已就绪'
+    $stDetail = '中文界面与原生菜单均已生效'
+    if (-not $Found) {
+        $level = 'bad'
+        $stTitle = '未检测到 Codex'
+        $stDetail = '请先安装 Codex / ChatGPT 桌面版，或用 -Target 指定目录'
+    } elseif (-not $TargetApp) {
+        $level = 'warn'
+        $stTitle = '尚未汉化'
+        $stDetail = '点下方按钮：复制副本 + 打补丁，约 40 秒'
+    } else {
+        $stDetail = 'Codex Desktop ' + $version + ' · 中文界面与原生菜单'
+    }
+    Write-Host ("STATE|{0}|{1}|{2}" -f $level, $stTitle, $stDetail)
+}
+
+function Invoke-Install {
+    param($Found, [string]$TargetDir, [switch]$Apply)
+
+    if (-not $Found -and -not $TargetDir) {
+        Write-Err '未检测到 Codex。用 -Target 手动指定 app 目录。'
+        return 1
+    }
+
+    # 1) 决定补丁目标目录
+    if ($TargetDir) {
+        $targetApp = (Get-Item -LiteralPath $TargetDir).FullName
+        $mode = 'explicit'
+    } elseif ($Found.Kind -eq 'store' -or -not (Test-DirWritable -Dir $Found.AppDir)) {
+        $targetApp = Join-Path $Root 'app'
+        $mode = 'store-copy'
+        if (-not $Apply) {
+            Write-Info ("DryRun：将把 {0} 复制到 {1}" -f $Found.AppDir, $targetApp)
+        } else {
+            if (-not (Test-Path -LiteralPath (Join-Path $targetApp 'resources\app.asar'))) {
+                Write-Info ("复制 Codex 到 {0}（约 1-2 GB，仅首次）..." -f $targetApp)
+                $sw = [System.Diagnostics.Stopwatch]::StartNew()
+                Copy-TreeBytes -Src $Found.AppDir -Dst $targetApp
+                $sw.Stop()
+                Write-Ok ("复制完成，耗时 {0:N0} 秒" -f $sw.Elapsed.TotalSeconds)
+            } else {
+                Write-Info '副本已存在，跳过复制。'
+            }
+        }
+    } else {
+        $targetApp = $Found.AppDir
+        $mode = 'direct'
+    }
+
+    if (-not $Apply -and $mode -eq 'store-copy') {
+        Write-Info '（DryRun 下副本尚未复制，补丁环节改为对源 asar 做只读检测）'
+        $asarForCheck = Join-Path $Found.AppDir 'resources\app.asar'
+        $r = Invoke-PatchPass -AsarPath $asarForCheck -Apply:$false
+        return 0
+    }
+
+    $asarPath = Join-Path $targetApp 'resources\app.asar'
+    if (-not (Test-Path -LiteralPath $asarPath)) {
+        Write-Err ("目标 asar 不存在：{0}" -f $asarPath)
+        return 1
+    }
+
+    # 2) 打补丁
+    Write-Info ''
+    Write-Info '--- 应用补丁 ---'
+    $patch = Invoke-PatchPass -AsarPath $asarPath -Apply:$Apply
+    if ($patch.CriticalMiss -gt 0) {
+        Write-Warn '关键补丁点未命中：界面很可能仍是英文。App 版本结构已变化，需要更新规则表。'
+    }
+
+    # 2b) 同步嵌入式 asar 完整性哈希。
+    #     漏掉这步的后果是：App 启动瞬间 FATAL 崩溃
+    #     （asar_util.cc:143 Integrity check failed），而不是"汉化没生效"。
+    Write-Info ''
+    Write-Info '--- 嵌入式完整性哈希 ---'
+    $emb = Update-EmbeddedAsarIntegrity -AppDir $targetApp -AsarPath $asarPath -Apply:$Apply
+    if ($emb.Status -eq 'updated') {
+        Write-Ok ("已同步 {0}" -f (Split-Path $emb.File -Leaf))
+        Write-Info ("  {0}" -f $emb.Old)
+        Write-Info ("  -> {0}" -f $emb.New)
+    } elseif ($emb.Status -eq 'already-ok') {
+        Write-Info ("已是最新 {0}" -f (Split-Path $emb.File -Leaf))
+    } elseif ($emb.Status -eq 'needs-update') {
+        Write-Warn ("待更新 {0}（DryRun 未写入）" -f (Split-Path $emb.File -Leaf))
+    } else {
+        Write-Warn '未在二进制中找到嵌入式 asar 完整性记录（该构建可能未开启此校验）'
+    }
+
+    # 3) localeOverride
+    Write-Info ''
+    Write-Info '--- 语言设置 ---'
+    $r = Set-LocaleOverride -Path $codexToml -Locale $Language -Apply:$Apply
+    if ($r.Changed) { Write-Ok ("localeOverride -> {0}（{1}）" -f $Language, $r.Reason) }
+    else            { Write-Info ("localeOverride 已是 {0}" -f $Language) }
+
+    # 4) 状态落盘
+    if ($Apply) {
+        if (-not (Test-Path -LiteralPath $Root)) { New-Item -ItemType Directory -Path $Root -Force | Out-Null }
+        $state = @{
+            schemaVersion = 1
+            mode          = $mode
+            sourcePath    = if ($Found) { $Found.AppDir } else { $null }
+            installPath   = $targetApp
+            version       = if ($Found) { Get-CodexVersion -AppDir $Found.AppDir } else { 'unknown' }
+            language      = $Language
+            patchedAt     = (Get-Date).ToString('s')
+        }
+        [System.IO.File]::WriteAllText($configJson, ($state | ConvertTo-Json -Depth 5), (New-Object System.Text.UTF8Encoding($false)))
+        Write-Log ("install mode=$mode target=$targetApp version=$($state.version)")
+    }
+    return 0
+}
+
+function Invoke-Launch {
+    param([string]$TargetApp, [string]$Lang)
+
+    if (-not $TargetApp) {
+        Write-Err '没有可启动的本地化副本。先运行 -Install，或用 -Target 指定目录。'
+        return 1
+    }
+    $exe = Join-Path $TargetApp 'ChatGPT.exe'
+    if (-not (Test-Path -LiteralPath $exe)) {
+        $exe = Join-Path $TargetApp 'Codex.exe'
+    }
+    if (-not (Test-Path -LiteralPath $exe)) {
+        Write-Err ("找不到可执行文件：{0}" -f $TargetApp)
+        return 1
+    }
+
+    $args = @()
+    if ($Lang) { $args += "--lang=$Lang" }
+    Write-Info ("启动：{0} {1}" -f $exe, ($args -join ' '))
+    Start-Process -FilePath $exe -ArgumentList $args
+    Write-Ok '已启动。'
+    return 0
+}
+
+# ---------------------------------------------------------------- 主流程
+
+Write-Host ''
+Write-Host 'Codex 本地化工具（codex-zh）' -ForegroundColor White -NoNewline
+Write-Host '  零依赖 / 不联网 / 不碰原版' -ForegroundColor DarkGray
+
+$found = Find-CodexInstall -Override $Target
+$targetApp = $null
+if (Test-Path -LiteralPath (Join-Path $Root 'app\resources\app.asar')) {
+    $targetApp = (Join-Path $Root 'app')
+}
+if ($Target -and (Test-Path -LiteralPath (Join-Path $Target 'resources\app.asar'))) {
+    $targetApp = (Get-Item -LiteralPath $Target).FullName
+}
+
+if ($Status -or (-not $Install -and -not $Launch)) {
+    Show-Status -Found $found -TargetApp $targetApp
+    if (-not $Install -and -not $Launch -and -not $Quiet) {
+        Write-Host '用法：' -ForegroundColor DarkGray
+        Write-Host '  -Status            查看状态' -ForegroundColor DarkGray
+        Write-Host '  -Install [-DryRun] 打补丁（Store 版会先复制副本）' -ForegroundColor DarkGray
+        Write-Host '  -Launch            启动本地化副本' -ForegroundColor DarkGray
+        Write-Host '  -Target <目录>     直接对指定 app 目录操作' -ForegroundColor DarkGray
+        Write-Host ''
+    }
+    if (-not $Install -and -not $Launch) { exit 0 }
+}
+
+$exit = 0
+if ($Install) {
+    $exit = Invoke-Install -Found $found -TargetDir $(if ($Target) { $Target } else { $null }) -Apply:(-not $DryRun)
+}
+if ($Launch) {
+    $e = Invoke-Launch -TargetApp $targetApp -Lang $Language
+    if ($e -ne 0) { $exit = $e }
+}
+exit $exit

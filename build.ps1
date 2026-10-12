@@ -1,0 +1,134 @@
+[CmdletBinding()]
+param(
+    [ValidateSet('Release', 'Debug')]
+    [string]$Configuration = 'Release'
+)
+
+$ErrorActionPreference = 'Stop'
+$projectRoot = $PSScriptRoot
+$sourceDir = Join-Path $projectRoot 'src'
+$sharedDir = Join-Path $projectRoot 'shared'
+$manifestFile = Join-Path $sourceDir 'app.manifest'
+$outputDir = Join-Path $projectRoot 'dist'
+$intermediateDir = Join-Path $projectRoot 'obj'
+$outputFile = Join-Path $outputDir 'CodexZh-Windows-x64.exe'
+
+# 汉化逻辑的唯一事实来源：仓库内的 localize\ 下的三个脚本。
+# 它们以嵌入资源形式打进 exe，运行时由 LocalizationRuntime 释放并调用。
+# 改逻辑只改那三个脚本、重新 build 即可，C# 侧无需任何改动。
+# （早期版本把它们放在仓库外的 ..\codex-zh\，这里保留回退以兼容旧布局。）
+$localizeDir = Join-Path $projectRoot 'localize'
+if (-not (Test-Path -LiteralPath (Join-Path $localizeDir 'CodexZh.ps1'))) {
+    $localizeDir = Join-Path (Split-Path $projectRoot -Parent) 'codex-zh'
+}
+$iconFile = Join-Path $intermediateDir 'AppIcon.ico'
+$iconGenerator = Join-Path $projectRoot 'scripts\generate-windows-icon.ps1'
+$frameworkRoot = Join-Path $env:WINDIR 'Microsoft.NET\Framework64\v4.0.30319'
+$compiler = Join-Path $frameworkRoot 'csc.exe'
+
+if (-not (Test-Path -LiteralPath $compiler)) {
+    throw "System C# compiler not found: $compiler"
+}
+
+New-Item -ItemType Directory -Force -Path $outputDir | Out-Null
+New-Item -ItemType Directory -Force -Path $intermediateDir | Out-Null
+
+if (-not (Test-Path -LiteralPath $iconGenerator)) {
+    throw "Missing Windows icon generator: $iconGenerator"
+}
+& $iconGenerator -OutputPath $iconFile
+
+$references = @(
+    (Join-Path $frameworkRoot 'WPF\PresentationFramework.dll'),
+    (Join-Path $frameworkRoot 'WPF\PresentationCore.dll'),
+    (Join-Path $frameworkRoot 'WPF\WindowsBase.dll'),
+    (Join-Path $frameworkRoot 'System.dll'),
+    (Join-Path $frameworkRoot 'System.Core.dll'),
+    (Join-Path $frameworkRoot 'System.Net.Http.dll'),
+    (Join-Path $frameworkRoot 'System.Web.Extensions.dll'),
+    (Join-Path $frameworkRoot 'System.Xml.dll'),
+    (Join-Path $frameworkRoot 'System.Xml.Linq.dll'),
+    (Join-Path $frameworkRoot 'System.Xaml.dll'),
+    (Join-Path $frameworkRoot 'System.Windows.Forms.dll')
+)
+
+foreach ($reference in $references) {
+    if (-not (Test-Path -LiteralPath $reference)) {
+        throw "Missing compiler reference: $reference"
+    }
+}
+
+$sharedResources = @(
+    @{ Path = (Join-Path $sharedDir 'i18n-bootstrap.js'); Name = 'CodexZhLauncher.Shared.i18n-bootstrap.js' },
+    @{ Path = (Join-Path $sharedDir 'locale-script.js'); Name = 'CodexZhLauncher.Shared.locale-script.js' },
+    @{ Path = (Join-Path $sharedDir 'menu-script.js'); Name = 'CodexZhLauncher.Shared.menu-script.js' },
+    @{ Path = (Join-Path $sharedDir 'menu-translations.json'); Name = 'CodexZhLauncher.Shared.menu-translations.json' }
+)
+foreach ($resource in $sharedResources) {
+    if (-not (Test-Path -LiteralPath $resource.Path)) {
+        throw "Missing shared resource: $($resource.Path)"
+    }
+}
+
+# 汉化脚本（嵌入资源）。资源名必须与 LocalizationRuntime.ScriptNames 完全一致。
+$localizeResources = @(
+    @{ Path = (Join-Path $localizeDir 'CodexZh.ps1');     Name = 'CodexZh.ps1' },
+    @{ Path = (Join-Path $localizeDir 'AsarInPlace.ps1'); Name = 'AsarInPlace.ps1' },
+    @{ Path = (Join-Path $localizeDir 'Rules.ps1');       Name = 'Rules.ps1' }
+)
+foreach ($resource in $localizeResources) {
+    if (-not (Test-Path -LiteralPath $resource.Path)) {
+        throw "Missing localize script: $($resource.Path)（应位于 ..\codex-zh\ 下）"
+    }
+}
+
+$sourceFiles = Get-ChildItem -LiteralPath $sourceDir -Filter '*.cs' | Sort-Object Name | Select-Object -ExpandProperty FullName
+if (-not $sourceFiles) {
+    throw 'No C# source files found.'
+}
+
+$compilerArgs = @(
+    '/nologo',
+    '/target:winexe',
+    '/platform:x64',
+    '/utf8output',
+    '/codepage:65001',
+    "/win32manifest:$manifestFile",
+    "/win32icon:$iconFile",
+    "/out:$outputFile"
+)
+
+if ($Configuration -eq 'Release') {
+    $compilerArgs += '/optimize+'
+    $compilerArgs += '/debug-'
+} else {
+    $compilerArgs += '/optimize-'
+    $compilerArgs += '/debug:full'
+}
+
+foreach ($reference in $references) {
+    $compilerArgs += "/reference:$reference"
+}
+foreach ($resource in $sharedResources) {
+    $compilerArgs += "/resource:$($resource.Path),$($resource.Name)"
+}
+foreach ($resource in $localizeResources) {
+    $compilerArgs += "/resource:$($resource.Path),$($resource.Name)"
+}
+$compilerArgs += "/resource:$iconFile,CodexZhLauncher.AppIcon.ico"
+$compilerArgs += $sourceFiles
+
+& $compiler $compilerArgs
+if ($LASTEXITCODE -ne 0) {
+    throw "Compilation failed. csc exit code: $LASTEXITCODE"
+}
+
+$hash = Get-FileHash -LiteralPath $outputFile -Algorithm SHA256
+$checksumFile = Join-Path $outputDir 'SHA256SUMS.txt'
+[System.IO.File]::WriteAllText(
+    $checksumFile,
+    "$($hash.Hash)  $([System.IO.Path]::GetFileName($outputFile))`r`n",
+    [System.Text.Encoding]::ASCII
+)
+Write-Host "Build completed: $outputFile"
+Write-Host "SHA-256: $($hash.Hash)"
