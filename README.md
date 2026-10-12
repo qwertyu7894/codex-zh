@@ -6,6 +6,27 @@
 
 ---
 
+## ⚠️ 构建产物文件名必须为纯 ASCII
+
+**不要**把 exe 命名为 `GPT汉化.exe` 这类含中文的名字。
+
+实机定位结论：可执行文件**文件名**含非 ASCII 字符时，这类 .NET Framework WPF
+程序会在初始化图形设备阶段触发 `ucrtbase.dll` 的
+`__fastfail(FAST_FAIL_FATAL_APP_EXIT)`，事件日志表现为
+`ucrtbase.dll` + `0xC0000409`，进程在 1~6 秒内**无声消失** ——
+没有窗口、没有错误框、没有控制台输出，用户看到的就是"双击没反应"。
+
+- **这不是本工具特有的**：上游官方正版、乃至现场手写的最小 WPF 程序，
+  改成中文名同样崩；改成 ASCII 名同样好。
+- **fail-fast 拦不住**：它绕过全部托管异常处理，
+  `try/catch` / `AppDomain.UnhandledException` / `DispatcherUnhandledException` 全部无效。
+- **只有文件名敏感**：文件夹名、品牌显示名（窗口标题、程序属性）用中文都不受影响，
+  因为那些不经过文件系统。
+
+`scripts/package.py` 里的 `BUILDS` 已固定这条约束并附注释。
+
+---
+
 ## 许可
 
 **本项目开源，采用 [MIT License](LICENSE)。**

@@ -146,6 +146,27 @@ if ($LASTEXITCODE -ne 0) {
     throw "Compilation failed. csc exit code: $LASTEXITCODE"
 }
 
+# 构建戳。package.py 会拿它和 AppInfo.Version 对账 ——
+# 万一本脚本编译失败，dist 里还是上一次的旧 exe，打包脚本就能靠这个发现
+# "包名版本号与包内实际版本对不上"，而不是静默打出一个名不副实的包。
+$appInfoText = [System.IO.File]::ReadAllText(
+    (Join-Path $sourceDir 'AppInfo.cs'), [System.Text.Encoding]::UTF8)
+$versionMatch = [regex]::Match($appInfoText, 'Version\s*=\s*"([^"]+)"')
+$appVersion = if ($versionMatch.Success) { $versionMatch.Groups[1].Value } else { 'unknown' }
+Write-Host "Assembly version: $appVersion"
+
+$buildInfo = @{
+    version = $appVersion
+    output  = [System.IO.Path]::GetFileName($outputFile)
+    brand   = $Brand
+    builtAt = (Get-Date).ToString('s')
+} | ConvertTo-Json -Compress
+[System.IO.File]::WriteAllText(
+    (Join-Path $outputDir 'buildinfo.json'),
+    $buildInfo,
+    (New-Object System.Text.UTF8Encoding($false))
+)
+
 $hash = Get-FileHash -LiteralPath $outputFile -Algorithm SHA256
 $checksumFile = Join-Path $outputDir 'SHA256SUMS.txt'
 [System.IO.File]::WriteAllText(

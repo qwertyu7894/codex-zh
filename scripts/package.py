@@ -72,7 +72,27 @@ def main():
         return 1
 
     version = read_version(root)
-    print('版本号（来自 src/AppInfo.cs）：%s\n' % version)
+
+    # 对账：dist/buildinfo.json 是 build.ps1 成功编译后才写的。
+    # 若版本对不上，说明 dist 里还是上一次的旧产物（编译失败时最容易发生），
+    # 打出来的包会"名字是 vX 内容却是 vY"。宁可拒绝打包也不要发出名不副实的包。
+    import json
+    stamp_path = os.path.join(args.dist, 'buildinfo.json')
+    if not os.path.exists(stamp_path):
+        print('拒绝打包：找不到 %s\n'
+              '  dist 里没有构建戳，说明还没成功构建过。先跑 build.ps1。'
+              % stamp_path, file=sys.stderr)
+        return 1
+    stamp = json.load(io.open(stamp_path, encoding='utf-8'))
+    if stamp.get('version') != version:
+        print('拒绝打包：版本对不上\n'
+              '  源码 AppInfo.Version = %s\n'
+              '  dist 构建戳 version  = %s\n'
+              '  —— dist 里是上一次的旧产物，请先重新构建。'
+              % (version, stamp.get('version')), file=sys.stderr)
+        return 1
+
+    print('版本号对账通过：%s（构建于 %s）\n' % (version, stamp.get('builtAt', '?')))
 
     os.makedirs(args.out, exist_ok=True)
     built = 0

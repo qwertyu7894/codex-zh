@@ -174,18 +174,59 @@ namespace CodexZhLauncher
 
         private static CodexInstall DetectCommonPortableInstall()
         {
-            var candidates = new[]
+            // ① 固定路径（沿用上游行为）
+            var fixedCandidates = new[]
             {
                 Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Programs", "Codex", "Codex.exe"),
                 Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), "Codex", "Codex.exe"),
                 Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86), "Codex", "Codex.exe")
             };
-
-            foreach (var candidate in candidates)
+            foreach (var candidate in fixedCandidates)
             {
                 if (File.Exists(candidate)) return BuildPortableInstall(candidate, "自动检测");
             }
+
+            // ② 各固定盘根目录下的常见目录名
+            //    官网安装版经常被随手装到某个盘的根目录（实测遇到过 D:\ChatGPT\），
+            //    上面那几个固定路径覆盖不到。只看盘的顶层、不递归，代价极小。
+            //    这类目录必须校验 resources\app.asar 存在才认 —— 否则可能把某个
+            //    恰好同名的程序误当成 Codex。
+            var relPaths = new[] { "ChatGPT.exe", "Codex.exe", "app\\ChatGPT.exe", "app\\Codex.exe" };
+            foreach (var drive in FixedDrives())
+            {
+                foreach (var folder in new[] { "ChatGPT", "Codex" })
+                {
+                    foreach (var rel in relPaths)
+                    {
+                        var candidate = Path.Combine(drive, folder, rel);
+                        if (!File.Exists(candidate)) continue;
+
+                        var dir = Path.GetDirectoryName(candidate);
+                        var asar = Path.Combine(dir, "resources", "app.asar");
+                        if (File.Exists(asar)) return BuildPortableInstall(candidate, "自动检测");
+                    }
+                }
+            }
+
             return null;
+        }
+
+        private static IEnumerable<string> FixedDrives()
+        {
+            DriveInfo[] drives;
+            try { drives = DriveInfo.GetDrives(); }
+            catch { return new string[0]; }
+
+            var roots = new List<string>();
+            foreach (var drive in drives)
+            {
+                try
+                {
+                    if (drive.DriveType == DriveType.Fixed && drive.IsReady) roots.Add(drive.Name);
+                }
+                catch { }
+            }
+            return roots;
         }
 
         private static CodexInstall BuildPortableInstall(string executablePath, string source)
