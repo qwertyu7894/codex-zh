@@ -22,11 +22,7 @@ $outputFile = Join-Path $outputDir $OutputName
 # 汉化逻辑的唯一事实来源：仓库内的 localize\ 下的三个脚本。
 # 它们以嵌入资源形式打进 exe，运行时由 LocalizationRuntime 释放并调用。
 # 改逻辑只改那三个脚本、重新 build 即可，C# 侧无需任何改动。
-# （早期版本把它们放在仓库外的 ..\codex-zh\，这里保留回退以兼容旧布局。）
 $localizeDir = Join-Path $projectRoot 'localize'
-if (-not (Test-Path -LiteralPath (Join-Path $localizeDir 'CodexZh.ps1'))) {
-    $localizeDir = Join-Path (Split-Path $projectRoot -Parent) 'codex-zh'
-}
 $iconFile = Join-Path $intermediateDir 'AppIcon.ico'
 $iconGenerator = Join-Path $projectRoot 'scripts\generate-windows-icon.ps1'
 $frameworkRoot = Join-Path $env:WINDIR 'Microsoft.NET\Framework64\v4.0.30319'
