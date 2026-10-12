@@ -66,3 +66,11 @@
       certutil -hashfile {{EXE}} SHA256
 
   把结果和文件里的那串比对，一致即未被篡改。
+
+
+【关于本工具】
+
+  本工具以 MIT 许可开源，完整许可文本见同目录的 LICENSE.txt。
+  你可以自由使用、修改、分发，只需保留版权声明。
+
+  源代码：https://github.com/qwertyu7894/codex-zh

@@ -97,11 +97,19 @@ def main():
                      encoding='utf-8-sig', newline='') as f:
             f.write(digest + '  ' + exename + '\r\n')
 
+        # MIT 第 2 条：分发二进制时必须随附版权声明与许可文本。
+        # 少了这个文件，客户端拿到的就是"无证分发"。
+        license_src = os.path.join(root, 'LICENSE')
+        if os.path.exists(license_src):
+            shutil.copy2(license_src, os.path.join(d, 'LICENSE.txt'))
+        else:
+            print('  ! 缺少 LICENSE —— 二进制分发会违反 MIT 第 2 条')
+
         zpath = os.path.join(args.out, folder + '.zip')
         if os.path.exists(zpath):
             os.remove(zpath)
         with zipfile.ZipFile(zpath, 'w', zipfile.ZIP_DEFLATED) as z:
-            for name in [exename, '使用说明.txt', 'SHA256SUMS.txt']:
+            for name in [exename, '使用说明.txt', 'LICENSE.txt', 'SHA256SUMS.txt']:
                 p = os.path.join(d, name)
                 if os.path.exists(p):
                     z.write(p, folder + '/' + name)
