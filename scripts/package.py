@@ -25,9 +25,14 @@ import sys
 import zipfile
 
 # (品牌显示名, dist 里的 exe 文件名, 发布包目录前缀)
+#
+# ⚠️ exe 文件名与发布包名必须**纯 ASCII**。
+# 客户端实测：含中文的 exe 名在对方机器上打不开，改成纯英文名就正常。
+# 中文只保留在"显示名"里（窗口标题、程序属性），那是编译进 exe 内部的，
+# 不经过文件系统，不受影响。
 BUILDS = [
     ('Codex 汉化增强工具', 'CodexZh-Windows-x64.exe', 'CodexZh'),
-    ('GPT汉化',            'GPT汉化.exe',             'GPT汉化'),
+    ('GPT汉化',            'GPTHanhua.exe',           'GPTHanhua'),
 ]
 
 
