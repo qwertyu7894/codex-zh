@@ -440,7 +440,7 @@ namespace CodexZhLauncher
                     AppendLog("已检测到 " + currentInstall.DisplayName + "，版本 " + currentInstall.Version + "。", Accent);
                     if (!String.IsNullOrWhiteSpace(currentInstall.StaleSourceVersion))
                     {
-                        AppendLog("源安装已升级到 " + currentInstall.StaleSourceVersion + "，本地化副本仍是 "
+                        AppendLog("源安装已是 " + currentInstall.StaleSourceVersion + "，本地化副本仍是 "
                             + currentInstall.Version + "。点「汉化并启动」会重新复制并打补丁。", Warning);
                     }
                 }
@@ -556,7 +556,7 @@ namespace CodexZhLauncher
                 // 不在这里点明，用户会一直跑旧版而毫无察觉。
                 SetStatus(
                     "副本已过期",
-                    "源安装已升级到 " + currentInstall.StaleSourceVersion
+                    "源安装已是 " + currentInstall.StaleSourceVersion
                         + "，本地化副本仍是 " + currentInstall.Version
                         + " —— 点「汉化并启动」即可跟上",
                     Warning);

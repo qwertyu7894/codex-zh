@@ -325,13 +325,29 @@ function Invoke-PatchPass {
         if ($hitFiles.Count -eq 0) {
             # 源串不存在，可能是"已经打过补丁"（重复运行 -Install 的正常情形），
             # 而不是"App 结构变了"。两者必须区分，否则会误报关键补丁失败。
+            #
+            # ⚠️ 光在 scope 里找到 To 是不够的：有的文件**天然**就含 To
+            #    （实测 26.915 / 26.1007 里 general-settings-*.js 都有
+            #     `enable_i18n`,!0 —— 那是设置页自己的读取默认值）。
+            #    拿它当"已打过补丁"，就会把"结构变了"静默判成"已打好"：
+            #    界面还是英文，工具却报成功。
+            #    所以要求 To 与规则声明的 AlreadyPatchedContext 出现在**同一个文件**里
+            #    —— 那才是我们改过的那个动态配置默认值块。
             $alreadyPatched = $false
             foreach ($e in $entries) {
-                if (Test-AsarEntryContains -AsarPath $AsarPath -DataOffset $info.DataOffset `
-                                           -Offset $e.Offset -Size $e.Size -Needle $rule.To) {
-                    $alreadyPatched = $true
-                    break
+                if (-not (Test-AsarEntryContains -AsarPath $AsarPath -DataOffset $info.DataOffset `
+                                                 -Offset $e.Offset -Size $e.Size -Needle $rule.To)) {
+                    continue
                 }
+                if ($rule.ContainsKey('AlreadyPatchedContext')) {
+                    $ctx = $rule.AlreadyPatchedContext
+                    if (-not (Test-AsarEntryContains -AsarPath $AsarPath -DataOffset $info.DataOffset `
+                                                     -Offset $e.Offset -Size $e.Size -Needle $ctx)) {
+                        continue
+                    }
+                }
+                $alreadyPatched = $true
+                break
             }
             if ($alreadyPatched) {
                 Write-Info ("    已打过补丁，跳过：{0}" -f $rule.Desc)
@@ -417,7 +433,7 @@ function Show-Status {
     $sourceVersion = if ($Found) { Get-CodexVersion -AppDir $Found.AppDir } else { 'unknown' }
     $stale = ($state -and $state.version -and $sourceVersion -ne 'unknown' -and $state.version -ne $sourceVersion)
     if ($stale) {
-        Write-Warn ("  副本已过期  : 源安装已升级到 {0}，本地化副本仍是 {1}" -f $sourceVersion, $state.version)
+        Write-Warn ("  副本已过期  : 源安装已是 {0}，本地化副本仍是 {1}" -f $sourceVersion, $state.version)
         Write-Warn  '                重打一次即可跟上：.\CodexZh.ps1 -Install'
     }
     Write-Host ''
@@ -446,7 +462,7 @@ function Show-Status {
     } elseif ($stale) {
         $level = 'warn'
         $stTitle = '副本已过期'
-        $stDetail = ('源安装已升级到 {0}，本地化副本仍是 {1} —— 重打一次即可跟上' -f $sourceVersion, $state.version)
+        $stDetail = ('源安装已是 {0}，本地化副本仍是 {1} —— 重打一次即可跟上' -f $sourceVersion, $state.version)
     } else {
         $stDetail = 'Codex Desktop ' + $version + ' · 中文界面与原生菜单'
     }
@@ -490,7 +506,9 @@ function Invoke-Install {
                 }
                 $nowVersion = Get-CodexVersion -AppDir $Found.AppDir
                 if ($prevVersion -and $nowVersion -and $prevVersion -ne $nowVersion) {
-                    Write-Warn ("检测到 Codex 已升级：{0} -> {1}" -f $prevVersion, $nowVersion)
+                    # 措辞刻意不判方向：这里只知道"变了"。之前写死"已升级"，
+                    # 装旧版（降级）时会说反。
+                    Write-Warn ("检测到 Codex 版本变化：{0} -> {1}" -f $prevVersion, $nowVersion)
                     Write-Info '旧的本地化副本已过期，需要重新复制。'
                     $needCopy = $true
                 } else {
