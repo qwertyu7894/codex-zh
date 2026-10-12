@@ -1,7 +1,8 @@
 # Codex 中文化工具
 
 基于 [shibaweidu/codex-desktop-zh](https://github.com/shibaweidu/codex-desktop-zh) 的改版，
-用**磁盘补丁**方案替换掉上游已失效的运行时注入。当前版本见 [`CHANGELOG.md`](CHANGELOG.md)，
+用**磁盘补丁**方案取代上游那套运行时注入（它在**新版** Codex 上已不可用）。
+当前版本见 [`CHANGELOG.md`](CHANGELOG.md)，
 版本号唯一来源是 `src/AppInfo.cs` 的 `AppInfo.Version`。
 
 ---
@@ -46,9 +47,15 @@
 
 上游 v0.7.7 的汉化方式，是用 `--inspect` 连上 Electron 主进程注入 JS 改写原生菜单。
 
-新版 Codex 桌面端（`26.1007.*`）关掉了 Electron fuse `EnableNodeCliInspectArguments`，
-`--inspect` 被静默忽略，**这条路已永久失效**；同时 MSIX 清单只声明 `en-US`，
-把 `app.getLocale()` 顶死成英文。
+**新版** Codex 桌面端（`26.1007.*` 起）关掉了 Electron fuse
+`EnableNodeCliInspectArguments`，`--inspect` 被静默忽略，这条路在**新版**上不可用。
+
+> **但它不是"永久失效"。** fuse 是**编译期烧进二进制**的属性，绑的是 **Codex 的版本**
+> 而不是时间 —— 仍跑旧版 Codex 的机器上这条路**照常工作**。所以真实表现是
+> "**部分机器可用、部分机器不可用**"，取决于客户端有没有让 Codex 自动升级
+> （商店版默认会）。这直接决定了下面两条模式各自的更新行为，见「更新后汉化还在吗」。
+
+同时 MSIX 清单只声明 `en-US`，把 `app.getLocale()` 顶死成英文。
 
 本分支改为**磁盘补丁**方案，完全不依赖运行时注入：
 
@@ -101,6 +108,34 @@ Integrity check failed for asar archive
 
 ---
 
+## 更新后汉化还在吗
+
+取决于用的是哪种模式 —— 这正是上面那个"fuse 绑版本"的直接后果。
+
+| | **界面汉化**（改 asar） | **菜单汉化**（localeOverride） |
+| --- | --- | --- |
+| **商店版**（`store-copy`） | ✅ **还在** —— 副本是独立目录，商店更新碰不到它 | ✅ 不受影响 |
+| **官网版 / 便携版**（`direct`） | ❌ **失效** —— 更新覆盖掉 `app.asar` | ✅ 不受影响 |
+
+**商店版为什么"还在"**：我们把 App 复制到 `%USERPROFILE%\.codex\codex-zh\app`
+之后再打补丁，而 Microsoft Store 的更新只替换 `C:\Program Files\WindowsApps\` 里的原件，
+**碰不到副本**。代价是副本会一直停在**旧版本**，而且它脱离 MSIX 后自带的更新器会失效
+（`missing current windows package family`），**永远不会自己升级**。
+
+> ⚠️ 所以商店版有个不易察觉的坑：**汉化没丢，但你跑的是旧版 Codex，且不会有人告诉你。**
+> 想跟上新版就重跑一次工具 —— `-Install` 会比对 `state.json` 记录的版本与当前商店版版本，
+> 不一致就自动重复制 + 重打补丁，并打印「检测到 Codex 已升级：A -> B」。
+
+**官网版 / 便携版为什么失效**：这类目录可写，走的是**原地补丁** —— 直接改你自己的
+`app.asar`。Codex 一更新（它自己的更新器，或你手动解压新版覆盖），`app.asar` 被盖掉，
+补丁就没了，界面回到英文。**不会崩**（exe 与 asar 会被一起换成自洽的一对）。
+重跑一次工具即可恢复。改动前留的 `app.asar.bak` 是**上一次安装时**的原件，不会随更新刷新。
+
+**菜单那一层两种模式都不受影响** —— `localeOverride` 写在 `~/.codex/config.toml`，
+是用户配置目录，Codex 升级不动它。
+
+---
+
 ## 项目结构
 
 | 路径 | 说明 |
@@ -118,4 +153,4 @@ Integrity check failed for asar archive
 **不修改 `C:\Program Files\WindowsApps\` 里的任何原版文件**。
 
 上游的自动更新检查已在本分支**停用**：它指向原作者仓库，
-留着会把用户的工具覆盖成上游版本，而那一套在当前 Codex 上已经失效。
+留着会把用户的工具覆盖成上游版本，而那一套在新版 Codex 上已经用不了。

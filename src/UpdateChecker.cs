@@ -21,8 +21,14 @@ namespace CodexZhLauncher
 
     internal static class UpdateChecker
     {
+        // 指向本分支自己的仓库。从 AppInfo.RepositorySlug 派生，避免仓库改名时漏改。
+        //
+        // 用 const 而非 static readonly：本项目按 C# 5 编译，const 字符串拼接仍是合法常量表达式；
+        // 而改成 readonly 字段会引出一个 CS0414"已赋值但从未使用"的警告 ——
+        // 这个常量是文档性质的（CheckAsync 已停用、不发起任何请求），留着它只为说明
+        // "将来若重新启用更新检查，该打哪个仓库"。
         private const string LatestReleaseApi =
-            "https://api.github.com/repos/shibaweidu/codex-desktop-zh/releases/latest";
+            "https://api.github.com/repos/" + AppInfo.RepositorySlug + "/releases/latest";
 
         private sealed class GitHubRelease
         {
@@ -46,7 +52,7 @@ namespace CodexZhLauncher
             //
             // 上游 LatestReleaseApi 指向 shibaweidu/codex-desktop-zh。若保留自动更新，
             // 它会提示"发现新版本"并把本程序覆盖成上游版本——而上游那套
-            // inspector 注入逻辑在当前 Codex 上已经失效，覆盖等于把用户的工具弄坏。
+            // inspector 注入逻辑在新版 Codex 上已经用不了，覆盖等于把用户的工具弄坏。
             //
             // 保留方法签名以免改动 UI；直接返回"无更新"，同时不发起任何网络请求。
             AppLog.Write("update.check.disabled （自研版本，已停用上游更新）");
@@ -73,7 +79,7 @@ namespace CodexZhLauncher
             {
                 var assets = release.assets ?? new GitHubAsset[0];
                 executable = assets.FirstOrDefault(item =>
-                    String.Equals(item.name, "Codex-Zh-Launcher-Windows-x64.exe", StringComparison.Ordinal));
+                    String.Equals(item.name, "CodexZh-Windows-x64.exe", StringComparison.Ordinal));
                 checksums = assets.FirstOrDefault(item =>
                     String.Equals(item.name, "SHA256SUMS.txt", StringComparison.Ordinal));
                 if (executable == null || checksums == null || executable.size <= 0)
@@ -97,9 +103,9 @@ namespace CodexZhLauncher
         internal static string SelfTest()
         {
             const string newer =
-                "{\"tag_name\":\"v0.6.1\",\"html_url\":\"https://github.com/shibaweidu/codex-desktop-zh/releases/tag/v0.6.1\",\"draft\":false,\"prerelease\":false,\"assets\":[{\"name\":\"Codex-Zh-Launcher-Windows-x64.exe\",\"browser_download_url\":\"https://github.com/shibaweidu/codex-desktop-zh/releases/download/v0.6.1/Codex-Zh-Launcher-Windows-x64.exe\",\"size\":1000},{\"name\":\"SHA256SUMS.txt\",\"browser_download_url\":\"https://github.com/shibaweidu/codex-desktop-zh/releases/download/v0.6.1/SHA256SUMS.txt\",\"size\":298}]}";
+                "{\"tag_name\":\"v0.6.1\",\"html_url\":\"https://github.com/qwertyu7894/codex-zh/releases/tag/v0.6.1\",\"draft\":false,\"prerelease\":false,\"assets\":[{\"name\":\"CodexZh-Windows-x64.exe\",\"browser_download_url\":\"https://github.com/qwertyu7894/codex-zh/releases/download/v0.6.1/CodexZh-Windows-x64.exe\",\"size\":1000},{\"name\":\"SHA256SUMS.txt\",\"browser_download_url\":\"https://github.com/qwertyu7894/codex-zh/releases/download/v0.6.1/SHA256SUMS.txt\",\"size\":298}]}";
             const string current =
-                "{\"tag_name\":\"v0.6.0\",\"html_url\":\"https://github.com/shibaweidu/codex-desktop-zh/releases/tag/v0.6.0\",\"draft\":false,\"prerelease\":false}";
+                "{\"tag_name\":\"v0.6.0\",\"html_url\":\"https://github.com/qwertyu7894/codex-zh/releases/tag/v0.6.0\",\"draft\":false,\"prerelease\":false}";
             var newerResult = Parse(newer, "0.6.0");
             var currentResult = Parse(current, "0.6.0");
             if (!newerResult.UpdateAvailable || currentResult.UpdateAvailable)
@@ -138,7 +144,7 @@ namespace CodexZhLauncher
                 uri.Scheme != Uri.UriSchemeHttps ||
                 !String.Equals(uri.Host, "github.com", StringComparison.OrdinalIgnoreCase) ||
                 !uri.AbsolutePath.StartsWith(
-                    "/shibaweidu/codex-desktop-zh/releases/",
+                    "/" + AppInfo.RepositorySlug + "/releases/",
                     StringComparison.OrdinalIgnoreCase))
             {
                 throw new InvalidOperationException("更新地址不是本项目的 GitHub Release。");
@@ -153,7 +159,7 @@ namespace CodexZhLauncher
                 uri.Scheme != Uri.UriSchemeHttps ||
                 !String.Equals(uri.Host, "github.com", StringComparison.OrdinalIgnoreCase) ||
                 !uri.AbsolutePath.StartsWith(
-                    "/shibaweidu/codex-desktop-zh/releases/download/",
+                    "/" + AppInfo.RepositorySlug + "/releases/download/",
                     StringComparison.OrdinalIgnoreCase) ||
                 !uri.AbsolutePath.EndsWith("/" + assetName, StringComparison.Ordinal))
             {

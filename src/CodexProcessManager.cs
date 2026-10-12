@@ -222,6 +222,26 @@ namespace CodexZhLauncher
                 !fileName.Equals("ChatGPT.exe", StringComparison.OrdinalIgnoreCase))
                 return false;
 
+            // 本地化副本的"另一半"：副本是从商店包复制出来的，两者共用同一个
+            // Electron 单实例锁（userData 目录相同）。商店版**开机自启**、或用户
+            // 从开始菜单点了商店版那个图标，锁就被占住 —— 这时副本进程起一下就自退，
+            // **而且不报错**，用户只看到"点了没反应"。
+            //
+            // 所以副本模式下**商店包的进程也必须算"Codex 正在运行"**：
+            // 否则工具既不显示「关闭并汉化重启」，也无法替用户把那几个进程关掉。
+            //
+            // 只对"本地化副本"放宽；官网版/便携版（direct）不受影响 ——
+            // 那时 install 不是副本目录，IsLocalizedCopyInstall 直接返回 false。
+            //
+            // 实测确认（2026-10-12）：即使两者 userData 目录不同
+            // （副本写 %APPDATA%\Codex，商店版被 MSIX 重定向到
+            //  ...\Packages\OpenAI.Codex_<pfn>\LocalCache\Roaming\Codex），
+            // 单实例锁**仍然是共用的** —— 商店版在跑时启动副本，副本的进程会立刻自退
+            // （实测：商店版 9 个进程在跑 → 启动副本 → 副本 0 个存活）。
+            // 所以这条放宽不是"顺手多关几个"，而是**必需**的。
+            if (IsLocalizedCopyInstall(install) && IsStoreCodexPath(fullPath))
+                return true;
+
             if (install.IsStorePackage)
                 return IsWithinDirectory(fullPath, install.InstallLocation);
 
@@ -357,6 +377,43 @@ namespace CodexZhLauncher
         private static string ProcessIdentity(CodexProcessInfo info)
         {
             return info.Id + ":" + info.StartTimeUtcTicks;
+        }
+
+        /// <summary>这个 install 是不是"本地化副本"（而不是商店包 / 官网版）。</summary>
+        private static bool IsLocalizedCopyInstall(CodexInstall install)
+        {
+            try
+            {
+                return String.Equals(
+                    TrimDirectorySeparator(Path.GetFullPath(install.InstallLocation)),
+                    TrimDirectorySeparator(Path.GetFullPath(LocalizationRuntime.LocalizedAppDir)),
+                    StringComparison.OrdinalIgnoreCase);
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
+        /// <summary>
+        /// 该路径是不是 Microsoft Store 装的那份 Codex
+        /// （<c>C:\Program Files\WindowsApps\OpenAI.Codex_&lt;版本&gt;_...</c>）。
+        /// </summary>
+        private static bool IsStoreCodexPath(string fullPath)
+        {
+            // 锚定成**连续的**一整段。商店包的目录名形如
+            //   C:\Program Files\WindowsApps\OpenAI.Codex_<版本>_<架构>__<发布者ID>\
+            // 尾部的 `_` 不能省：它把 `OpenAI.Codex` 与另一套 `OpenAI.CodexBeta`
+            // 之类的包名区分开。
+            //
+            // 刻意**不**写成两段互相独立的子串判断 —— 那样连"相邻"都不要求，
+            // 用户自建的 `D:\WindowsApps\OpenAI.Codex-notes\ChatGPT.exe` 也会命中。
+            return fullPath.IndexOf(@"\WindowsApps\OpenAI.Codex_", StringComparison.OrdinalIgnoreCase) >= 0;
+        }
+
+        private static string TrimDirectorySeparator(string path)
+        {
+            return path.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
         }
 
         private static bool IsWithinDirectory(string path, string directory)

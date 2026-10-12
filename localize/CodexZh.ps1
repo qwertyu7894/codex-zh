@@ -407,13 +407,27 @@ function Show-Status {
     } else {
         Write-Host ("  config.toml : 不存在（{0}）" -f $codexToml) -ForegroundColor Yellow
     }
+
+    # 副本是否落后于源安装。
+    # 比对用的是**同一套版本号**：$state.version 记的是打补丁那一刻
+    # Get-CodexVersion($Found.AppDir) 的值，与现在的值同源，可以直接比。
+    # ⚠️ 不要改成 Get-CodexVersion($TargetApp)：商店副本的目录名不含 OpenAI.Codex_ 前缀，
+    #    会退化成读 owl-app.ini，那是另一套编号（副本 26.1007.21434 vs 商店包 26.1007.2314.0），
+    #    永远对不上，必然误报"副本已过期"。
+    $sourceVersion = if ($Found) { Get-CodexVersion -AppDir $Found.AppDir } else { 'unknown' }
+    $stale = ($state -and $state.version -and $sourceVersion -ne 'unknown' -and $state.version -ne $sourceVersion)
+    if ($stale) {
+        Write-Warn ("  副本已过期  : 源安装已升级到 {0}，本地化副本仍是 {1}" -f $sourceVersion, $state.version)
+        Write-Warn  '                重打一次即可跟上：.\CodexZh.ps1 -Install'
+    }
     Write-Host ''
 
-    # ---- 供 GUI 解析的结构化状态行 ----
+    # ---- 结构化状态行 ----
+    # 注意：C# 侧（src/）目前**不消费**这两行 —— 界面状态走 CodexDiscovery。
+    # 保留是给"直接跑脚本"的场合看的。（v1.1.3 之前这里的注释误称"供 GUI 解析"。）
     # DETECT|<可执行路径>|<形态>|<版本>
     # STATE|<ok|warn|bad>|<标题>|<说明>
-    $version = 'unknown'
-    if ($Found) { $version = Get-CodexVersion -AppDir $Found.AppDir }
+    $version = if ($Found) { Get-CodexVersion -AppDir $Found.AppDir } else { 'unknown' }
     $detectPath = if ($Found) { $Found.AppDir } else { '' }
     $detectKind = if ($Found) { $Found.Kind } else { '' }
     Write-Host ("DETECT|{0}|{1}|{2}" -f $detectPath, $detectKind, $version)
@@ -429,6 +443,10 @@ function Show-Status {
         $level = 'warn'
         $stTitle = '尚未汉化'
         $stDetail = '点下方按钮：复制副本 + 打补丁，约 40 秒'
+    } elseif ($stale) {
+        $level = 'warn'
+        $stTitle = '副本已过期'
+        $stDetail = ('源安装已升级到 {0}，本地化副本仍是 {1} —— 重打一次即可跟上' -f $sourceVersion, $state.version)
     } else {
         $stDetail = 'Codex Desktop ' + $version + ' · 中文界面与原生菜单'
     }

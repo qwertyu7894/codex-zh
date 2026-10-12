@@ -11,7 +11,7 @@ struct LogEntry: Identifiable {
 
 @MainActor
 final class LauncherModel: ObservableObject {
-    // 注意：macOS 端本分支尚未适配（仍依赖已失效的 --inspect 注入方案），
+    // 注意：macOS 端本分支尚未适配（仍依赖在新版 Codex 上已不可用的 --inspect 注入方案），
     // 因此这里刻意保留上游版本号，不跟随 Windows 端升到 1.0.0。
     static let version = "0.7.7"
 

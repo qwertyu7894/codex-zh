@@ -35,6 +35,10 @@ BUILDS = [
     ('GPT汉化',            'GPTHanhua.exe',           'GPTHanhua'),
 ]
 
+# 交付用的主品牌：用户日常直接从这个 exe 发给客户，所以打包后要同步一份过去
+# （见 --handoff）。少这一步就会出现"源码已是新版、发出去的还是旧版"。
+HANDOFF_EXE = 'GPTHanhua.exe'
+
 
 def read_version(root):
     """版本号唯一来源：src/AppInfo.cs。避免 C# 和打包脚本各写一份。"""
@@ -65,6 +69,9 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('--dist', default=os.path.join(root, 'dist'))
     ap.add_argument('--out', default=os.path.join(os.path.dirname(root), 'release'))
+    ap.add_argument('--handoff', default=None,
+                    help='打包后把 %s 额外复制到这个目录（交付用，例如音乐文件夹）'
+                         % HANDOFF_EXE)
     args = ap.parse_args()
 
     if not os.path.isdir(args.dist):
@@ -142,6 +149,18 @@ def main():
         print('%-38s %8d 字节  %s  SHA256=%s...'
               % (folder + '.zip', os.path.getsize(zpath), brand, digest[:20]))
         built += 1
+
+    # 交付副本：用户直接从音乐文件夹把单个 exe 发给客户，
+    # 所以这里必须跟着一起更新，否则源码是新版、发出去的还是旧版。
+    if args.handoff:
+        src = os.path.join(args.dist, HANDOFF_EXE)
+        if os.path.exists(src):
+            os.makedirs(args.handoff, exist_ok=True)
+            dst = os.path.join(args.handoff, HANDOFF_EXE)
+            shutil.copy2(src, dst)
+            print('\n已同步交付副本 -> %s' % dst)
+        else:
+            print('\n! 交付副本未同步：dist 里没有 %s' % HANDOFF_EXE)
 
     print('\n共打包 %d 个发布包 -> %s' % (built, args.out))
     return 0 if built else 1
