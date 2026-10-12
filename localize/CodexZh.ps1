@@ -514,6 +514,23 @@ function Invoke-Install {
         return 1
     }
 
+    # 2a) 原地补丁模式下，先给原安装目录留一份原始 asar。
+    #     官网版 / 便携版目录可写，我们直接改的就是**用户原本的** app.asar，
+    #     没有副本可退 —— 不留备份等于不可恢复。Store 版则不必：
+    #     WindowsApps 里的原件我们从不触碰，原件本身就是最好的备份。
+    if ($mode -eq 'direct' -and $Apply) {
+        $asarBackup = $asarPath + '.bak'
+        if (-not (Test-Path -LiteralPath $asarBackup)) {
+            Write-Info ('为原安装目录留一份备份：{0}' -f $asarBackup)
+            try {
+                Copy-Item -LiteralPath $asarPath -Destination $asarBackup -Force
+            } catch {
+                Write-Err ("备份失败，为安全起见中止：{0}" -f $_.Exception.Message)
+                return 1
+            }
+        }
+    }
+
     # 2) 打补丁
     Write-Info ''
     Write-Info '--- 应用补丁 ---'
