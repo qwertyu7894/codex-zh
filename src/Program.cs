@@ -8,8 +8,8 @@ using System.Windows;
 [assembly: System.Reflection.AssemblyCompany("Codex Localization Enhancer Community")]
 [assembly: System.Reflection.AssemblyProduct(CodexZhLauncher.AppInfo.BrandName)]
 [assembly: System.Reflection.AssemblyCopyright("Copyright 2026")]
-[assembly: System.Reflection.AssemblyVersion("1.0.0.0")]
-[assembly: System.Reflection.AssemblyFileVersion("1.0.0.0")]
+[assembly: System.Reflection.AssemblyVersion("1.1.0.0")]
+[assembly: System.Reflection.AssemblyFileVersion("1.1.0.0")]
 
 namespace CodexZhLauncher
 {
@@ -22,6 +22,28 @@ namespace CodexZhLauncher
 
         [STAThread]
         private static void Main(string[] args)
+        {
+            // winexe 的致命伤：启动阶段任何未捕获异常都不会有任何提示 ——
+            // 没有控制台输出、没有弹框，进程直接静默消失，
+            // 用户看到的就是"双击没反应"。这里兜住所有未处理异常。
+            AppDomain.CurrentDomain.UnhandledException +=
+                delegate(object sender, UnhandledExceptionEventArgs e)
+                {
+                    ReportFatal(e.ExceptionObject as Exception, "运行时发生未处理异常");
+                };
+
+            try
+            {
+                RunMain(args);
+            }
+            catch (Exception ex)
+            {
+                ReportFatal(ex, "启动失败");
+                Environment.ExitCode = 1;
+            }
+        }
+
+        private static void RunMain(string[] args)
         {
             if (args.Length > 0 && String.Equals(args[0], "--apply-update-windows", StringComparison.Ordinal))
             {
@@ -50,8 +72,34 @@ namespace CodexZhLauncher
                 System.Windows.Interop.RenderMode.SoftwareOnly;
             var app = new Application();
             app.ShutdownMode = ShutdownMode.OnMainWindowClose;
+            app.DispatcherUnhandledException +=
+                delegate(object sender, System.Windows.Threading.DispatcherUnhandledExceptionEventArgs e)
+                {
+                    ReportFatal(e.Exception, "运行时发生未处理异常");
+                    e.Handled = true;
+                };
             UpdateInstaller.ScheduleCleanup();
             app.Run(new MainWindow());
+        }
+
+        /// <summary>
+        /// 把"静默死亡"变成"看得见"：写日志 + 弹框。
+        /// 客户端不可能去翻日志文件，但错误框会直接把原因摆在他面前。
+        /// </summary>
+        private static void ReportFatal(Exception ex, string title)
+        {
+            var detail = ex == null ? "（无异常详情）" : ex.ToString();
+            try { AppLog.Write("fatal [" + title + "] " + detail); }
+            catch { }
+            try
+            {
+                MessageBox.Show(
+                    title + "\n\n" + detail + "\n\n日志文件：\n" + AppLog.FilePath,
+                    AppInfo.BrandName + " 出错了",
+                    MessageBoxButton.OK,
+                    MessageBoxImage.Error);
+            }
+            catch { }
         }
 
         private static void RunCommand(string[] args)

@@ -193,12 +193,16 @@ namespace CodexZhLauncher
                     {
                         if (e.Data == null) return;
                         lock (lines) { lines.Add(e.Data); }
+                        // 每行都落盘：客户机器上出问题时，launcher.log 里就有完整证据，
+                        // 不用再去猜是哪一步断的。
+                        AppLog.Write("ps> " + e.Data);
                         Report(onProgress, e.Data);
                     };
                     process.ErrorDataReceived += delegate(object sender, DataReceivedEventArgs e)
                     {
                         if (String.IsNullOrWhiteSpace(e.Data)) return;
                         lock (lines) { lines.Add("[stderr] " + e.Data); }
+                        AppLog.Write("ps! " + e.Data);
                         Report(onProgress, "[stderr] " + e.Data);
                     };
 
