@@ -237,6 +237,54 @@ function Set-LocaleOverride {
     return @{ Changed = $true; Reason = 'appended-desktop-section' }
 }
 
+# ---------------------------------------------------------------- 快捷方式
+
+function New-AppShortcuts {
+    <#
+      给本地化副本建立桌面 + 开始菜单快捷方式。
+      开始菜单那条很关键：客户端习惯"按 Win 键搜图标打开"，
+      有了它才能搜到中文版，而不是只能搜到那个永远英文的商店原版。
+
+      快捷方式带上 --lang，是为了兼容系统语言非中文的机器
+      （菜单语言跟随 app.getLocale()，中文系统下不加也对，加了更稳）。
+    #>
+    param(
+        [Parameter(Mandatory)][string]$ExePath,
+        [Parameter(Mandatory)][string]$WorkDir,
+        [Parameter(Mandatory)][string]$Locale,
+        [string]$Name = 'ChatGPT 中文版',
+        [switch]$Apply
+    )
+
+    $targets = @()
+    $desktop = [Environment]::GetFolderPath('Desktop')
+    $programs = [Environment]::GetFolderPath('Programs')
+    if ($desktop) { $targets += (Join-Path $desktop ($Name + '.lnk')) }
+    if ($programs) { $targets += (Join-Path $programs ($Name + '.lnk')) }
+
+    if (-not $Apply) { return @{ Status = 'dry'; Targets = $targets } }
+
+    $shell = New-Object -ComObject WScript.Shell
+    $made = @()
+    foreach ($t in $targets) {
+        try {
+            $dir = Split-Path $t -Parent
+            if (-not (Test-Path -LiteralPath $dir)) { New-Item -ItemType Directory -Path $dir -Force | Out-Null }
+            $sc = $shell.CreateShortcut($t)
+            $sc.TargetPath = $ExePath
+            $sc.Arguments = '--lang=' + $Locale
+            $sc.WorkingDirectory = $WorkDir
+            $sc.IconLocation = $ExePath + ',0'
+            $sc.Description = 'ChatGPT 中文版（本地化副本，与商店原版共存）'
+            $sc.Save()
+            $made += $t
+        } catch {
+            Write-Warn ("快捷方式创建失败：{0} —— {1}" -f $t, $_.Exception.Message)
+        }
+    }
+    return @{ Status = 'ok'; Made = $made }
+}
+
 # ---------------------------------------------------------------- 打补丁
 
 function Invoke-PatchPass {
@@ -471,6 +519,25 @@ function Invoke-Install {
         [System.IO.File]::WriteAllText($configJson, ($state | ConvertTo-Json -Depth 5), (New-Object System.Text.UTF8Encoding($false)))
         Write-Log ("install mode=$mode target=$targetApp version=$($state.version)")
     }
+
+    # 5) 桌面 / 开始菜单快捷方式
+    #    没有这条，客户端只能从开始菜单搜到「商店原版」——而那个永远是英文，
+    #    用户会以为汉化没生效。
+    Write-Info ''
+    Write-Info '--- 快捷方式 ---'
+    $exeForShortcut = Join-Path $targetApp 'ChatGPT.exe'
+    if (-not (Test-Path -LiteralPath $exeForShortcut)) { $exeForShortcut = Join-Path $targetApp 'Codex.exe' }
+    if (Test-Path -LiteralPath $exeForShortcut) {
+        $sc = New-AppShortcuts -ExePath $exeForShortcut -WorkDir $targetApp -Locale $Language -Apply:$Apply
+        if ($sc.Status -eq 'ok') {
+            foreach ($m in $sc.Made) { Write-Ok ("已创建快捷方式：{0}" -f $m) }
+        } elseif ($sc.Status -eq 'dry') {
+            foreach ($m in $sc.Targets) { Write-Info ("将创建快捷方式：{0}" -f $m) }
+        }
+    } else {
+        Write-Warn '没找到可执行文件，跳过快捷方式创建。'
+    }
+
     return 0
 }
 
