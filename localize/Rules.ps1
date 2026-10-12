@@ -26,6 +26,18 @@ function Get-CodexPatchRules {
             To       = '`enable_i18n`,!0'
             Expect   = 1
             Critical = $true
+
+            # 判"已打过补丁"时，必须与 To 出现在**同一个文件**里的上下文串。
+            #
+            # 为什么需要它：有些文件**天然**就含 To。实测 26.915 与 26.1007 两版里，
+            # `general-settings-*.js` 都有 `enable_i18n`,!0（那是设置页自己的读取默认值），
+            # 但它**不含** `locale_source`；而我们真正要改的那个「动态配置默认值块」里,
+            # `enable_i18n` 与 `locale_source` 是紧挨着的。
+            #
+            # 没有这个约束的话，"App 结构变了（From 整体消失）"会被静默判成
+            # "已经打过补丁、跳过" —— 界面仍是英文，工具却报成功。
+            AlreadyPatchedContext = '`locale_source`'
+
             Desc     = '界面多语言总开关：默认 false -> true（不开则界面永远是英文）'
         },
         @{
