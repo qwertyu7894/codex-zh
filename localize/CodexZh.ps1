@@ -264,6 +264,16 @@ function New-AppShortcuts {
 
     if (-not $Apply) { return @{ Status = 'dry'; Targets = $targets } }
 
+    # 图标：优先用 App 自带的高质量 .ico。
+    # 直接用 exe 的内嵌图标资源会发虚（尺寸不全），和商店原版的图块对不上，
+    # 用户一眼就看出"这两个图标不一样"。light 版是黑色结，与商店原版一致。
+    $iconFile = $ExePath
+    foreach ($cand in @(
+                (Join-Path $WorkDir 'resources\chatgpt-app-light.ico'),
+                (Join-Path $WorkDir 'resources\icon-chatgpt.ico'))) {
+        if (Test-Path -LiteralPath $cand) { $iconFile = $cand; break }
+    }
+
     $shell = New-Object -ComObject WScript.Shell
     $made = @()
     foreach ($t in $targets) {
@@ -274,7 +284,7 @@ function New-AppShortcuts {
             $sc.TargetPath = $ExePath
             $sc.Arguments = '--lang=' + $Locale
             $sc.WorkingDirectory = $WorkDir
-            $sc.IconLocation = $ExePath + ',0'
+            $sc.IconLocation = $iconFile + ',0'
             $sc.Description = 'ChatGPT 中文版（本地化副本，与商店原版共存）'
             $sc.Save()
             $made += $t
@@ -282,7 +292,7 @@ function New-AppShortcuts {
             Write-Warn ("快捷方式创建失败：{0} —— {1}" -f $t, $_.Exception.Message)
         }
     }
-    return @{ Status = 'ok'; Made = $made }
+    return @{ Status = 'ok'; Made = $made; Icon = $iconFile }
 }
 
 # ---------------------------------------------------------------- 打补丁
@@ -531,6 +541,7 @@ function Invoke-Install {
         $sc = New-AppShortcuts -ExePath $exeForShortcut -WorkDir $targetApp -Locale $Language -Apply:$Apply
         if ($sc.Status -eq 'ok') {
             foreach ($m in $sc.Made) { Write-Ok ("已创建快捷方式：{0}" -f $m) }
+            Write-Info ("使用图标：{0}" -f $sc.Icon)
         } elseif ($sc.Status -eq 'dry') {
             foreach ($m in $sc.Targets) { Write-Info ("将创建快捷方式：{0}" -f $m) }
         }
