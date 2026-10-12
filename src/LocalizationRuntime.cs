@@ -91,17 +91,23 @@ namespace CodexZhLauncher
                 AppLog.Write("ps.install.criticalmiss");
                 return report;
             }
-            if (!HasLocalizedCopy)
+
+            // 注意：判断成败**不能**用"本地化副本是否存在"。
+            // 官网版 / 便携版目录可写，走的是【原地补丁】、不生成副本，
+            // 用副本判断会把它们误报成失败。
+            if (ContainsAny(installLines, "[错误]"))
             {
-                report.Message = "本地化副本未生成，安装环节失败。详见运行日志。";
-                AppLog.Write("ps.install.nocopy");
+                report.Message = "补丁环节报错，详见运行日志。";
+                AppLog.Write("ps.install.error");
                 return report;
             }
 
             report.LocaleApplied = true;
             report.MenuApplied = true;
             report.LocaleDetail = "enable_i18n 默认值已改为 true；localeOverride = " + locale;
-            report.MenuDetail = "运行于本地化副本（已脱离 MSIX），原生菜单随系统语言加载 native-menu-locales";
+            report.MenuDetail = HasLocalizedCopy
+                ? "运行于本地化副本（已脱离 MSIX），原生菜单随系统语言加载 native-menu-locales"
+                : "运行于官网版/便携版安装目录，原生菜单随系统语言加载 native-menu-locales";
 
             Report(onProgress, "正在启动本地化副本…");
             AppLog.Write("ps.launch.begin");

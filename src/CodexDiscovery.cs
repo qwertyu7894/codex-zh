@@ -19,15 +19,19 @@ namespace CodexZhLauncher
 
         public static async Task<CodexInstall> DetectAsync()
         {
-            // 本地化副本优先：一旦存在，它就是"当前安装"。
-            // 这样 CodexProcessManager 按 InstallLocation 比对进程时能认出副本，
-            // "正在运行 / 关闭并重启" 那套流程无需任何改动即可正常工作。
-            var localized = DetectLocalizedCopy();
-            if (localized != null) return localized;
-
+            // ① 手动指定优先：用户显式选过的目录不能被任何自动探测顶掉，
+            //    否则「选择 Codex」按钮选完，下一次轮询就被覆盖回去了。
             var custom = LoadPortableInstall();
             if (custom != null) return custom;
 
+            // ② 其次是本地化副本：一旦存在，它就是"当前安装"。
+            //    这样 CodexProcessManager 按 InstallLocation 比对进程时能认出副本，
+            //    "正在运行 / 关闭并重启" 那套流程无需任何改动即可正常工作。
+            //    注意：只在【没有手动指定】时才生效。
+            var localized = DetectLocalizedCopy();
+            if (localized != null) return localized;
+
+            // ③ 再往下才是自动探测
             var store = await DetectStorePackageAsync();
             if (store != null) return store;
 

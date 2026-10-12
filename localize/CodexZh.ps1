@@ -505,12 +505,30 @@ Write-Host 'Codex 本地化工具（codex-zh）' -ForegroundColor White -NoNewli
 Write-Host '  零依赖 / 不联网 / 不碰原版' -ForegroundColor DarkGray
 
 $found = Find-CodexInstall -Override $Target
+
+# 解析「要启动哪个 app 目录」。三种来源按优先级：
+#   1. 显式 -Target
+#   2. state.json 里 -Install 记下的 installPath
+#      —— 这一条是为【便携版 / 官网安装版】准备的：它们目录可写，
+#         -Install 是「原地补丁」不生成副本，所以启动目标不是副本目录而是它本身。
+#   3. 默认的本地化副本目录（Store 版走这条）
 $targetApp = $null
-if (Test-Path -LiteralPath (Join-Path $Root 'app\resources\app.asar')) {
-    $targetApp = (Join-Path $Root 'app')
-}
 if ($Target -and (Test-Path -LiteralPath (Join-Path $Target 'resources\app.asar'))) {
     $targetApp = (Get-Item -LiteralPath $Target).FullName
+}
+if (-not $targetApp -and (Test-Path -LiteralPath $configJson)) {
+    try {
+        $st = Get-Content -LiteralPath $configJson -Raw -Encoding UTF8 | ConvertFrom-Json
+        if ($st.installPath -and (Test-Path -LiteralPath (Join-Path $st.installPath 'resources\app.asar'))) {
+            $targetApp = $st.installPath
+        }
+    } catch {}
+}
+if (-not $targetApp) {
+    $copyDir = Join-Path $Root 'app'
+    if (Test-Path -LiteralPath (Join-Path $copyDir 'resources\app.asar')) {
+        $targetApp = $copyDir
+    }
 }
 
 if ($Status -or (-not $Install -and -not $Launch)) {
