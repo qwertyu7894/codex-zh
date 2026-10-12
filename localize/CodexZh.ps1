@@ -453,14 +453,47 @@ function Invoke-Install {
         if (-not $Apply) {
             Write-Info ("DryRun：将把 {0} 复制到 {1}" -f $Found.AppDir, $targetApp)
         } else {
-            if (-not (Test-Path -LiteralPath (Join-Path $targetApp 'resources\app.asar'))) {
-                Write-Info ("复制 Codex 到 {0}（约 1-2 GB，仅首次）..." -f $targetApp)
+            $copyAsar = Join-Path $targetApp 'resources\app.asar'
+            $needCopy = $false
+
+            if (-not (Test-Path -LiteralPath $copyAsar)) {
+                $needCopy = $true
+                Write-Info '首次安装，需要复制副本。'
+            } else {
+                # 版本变化检测 —— 这一步不能少。
+                # 商店版升级后，副本会停留在旧版本；只看"副本在不在"的话会永远跳过
+                # 重新复制，用户就一直在跑旧版 Codex 且毫无察觉。
+                $prevVersion = $null
+                if (Test-Path -LiteralPath $configJson) {
+                    try {
+                        $st = Get-Content -LiteralPath $configJson -Raw -Encoding UTF8 | ConvertFrom-Json
+                        $prevVersion = $st.version
+                    } catch {}
+                }
+                $nowVersion = Get-CodexVersion -AppDir $Found.AppDir
+                if ($prevVersion -and $nowVersion -and $prevVersion -ne $nowVersion) {
+                    Write-Warn ("检测到 Codex 已升级：{0} -> {1}" -f $prevVersion, $nowVersion)
+                    Write-Info '旧的本地化副本已过期，需要重新复制。'
+                    $needCopy = $true
+                } else {
+                    Write-Info ("副本已是最新（{0}），跳过复制。" -f $nowVersion)
+                }
+            }
+
+            if ($needCopy) {
+                if (Test-Path -LiteralPath $targetApp) {
+                    Write-Info '清理旧副本…'
+                    try {
+                        Remove-Item -LiteralPath $targetApp -Recurse -Force -ErrorAction Stop
+                    } catch {
+                        throw ("无法删除旧副本：{0}。请确认 Codex 已完全退出后重试。" -f $_.Exception.Message)
+                    }
+                }
+                Write-Info ("复制 Codex 到 {0}（约 1-2 GB，可能需要一会）..." -f $targetApp)
                 $sw = [System.Diagnostics.Stopwatch]::StartNew()
                 Copy-TreeBytes -Src $Found.AppDir -Dst $targetApp
                 $sw.Stop()
                 Write-Ok ("复制完成，耗时 {0:N0} 秒" -f $sw.Elapsed.TotalSeconds)
-            } else {
-                Write-Info '副本已存在，跳过复制。'
             }
         }
     } else {
