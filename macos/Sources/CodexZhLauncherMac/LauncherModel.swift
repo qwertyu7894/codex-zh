@@ -11,8 +11,9 @@ struct LogEntry: Identifiable {
 
 @MainActor
 final class LauncherModel: ObservableObject {
+    // 注意：macOS 端本分支尚未适配（仍依赖已失效的 --inspect 注入方案），
+    // 因此这里刻意保留上游版本号，不跟随 Windows 端升到 1.0.0。
     static let version = "0.7.7"
-    static let sponsorURL = URL(string: "https://www.appkaola.com")!
 
     @Published private(set) var install: CodexInstall?
     @Published private(set) var runningCount = 0
@@ -209,10 +210,6 @@ final class LauncherModel: ObservableObject {
 
     func openFeedback() {
         NSWorkspace.shared.open(GitHubUpdateChecker.feedbackURL)
-    }
-
-    func openSponsor() {
-        NSWorkspace.shared.open(Self.sponsorURL)
     }
 
     private func launch(locale: String) {
