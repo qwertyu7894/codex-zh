@@ -1,27 +1,23 @@
-# Codex 中文化工具（自研分支）
+# Codex 中文化工具
 
-基于 [shibaweidu/codex-desktop-zh](https://github.com/shibaweidu/codex-desktop-zh) 的第二个改版，
-修复了若干问题。当前版本 **v1.0.0**。
+基于 [shibaweidu/codex-desktop-zh](https://github.com/shibaweidu/codex-desktop-zh) 的改版，
+用**磁盘补丁**方案替换掉上游已失效的运行时注入。当前版本见 [`CHANGELOG.md`](CHANGELOG.md)，
+版本号唯一来源是 `src/AppInfo.cs` 的 `AppInfo.Version`。
 
 ---
 
-## ⚠️ 许可声明（请先读这一段）
+## 许可
 
-**本项目不是开源项目。**
+**本项目开源，采用 [MIT License](LICENSE)。**
 
-| 范围 | 许可 |
+| 范围 | 版权 |
 | --- | --- |
-| **上游原始文件**（`src/`、`shared/`、`macos/`、`build.ps1` 骨架等） | 沿用上游 **MIT License**，版权归原作者所有，见 [`LICENSE`](LICENSE) |
-| **本分支新增与修改的部分** | **保留所有权利（All rights reserved），不对外开源** |
+| 上游原始文件（`src/`、`shared/`、`macos/`、`build.ps1` 骨架等） | © 2026 Codex Zh Launcher contributors |
+| 本分支的新增与修改（`localize/` 全目录、重写的 `LocalizationRuntime`、快捷方式、配色等） | © 2026 qwertyu7894 |
 
-关于 MIT：它允许闭源分发衍生版本，**但要求保留版权声明与许可文本**。
-因此本仓库保留 `LICENSE` 与 `THIRD_PARTY_NOTICES.md`，**这不是把项目变成开源，而是履行上游的署名义务**。
+两者都以 MIT 授权：**可自由使用、修改、分发、商用、闭源再发布，只需保留版权声明与许可文本。**
 
-本分支自己写的部分（`localize/` 全目录、重写的 `src/LocalizationRuntime.cs`、
-`src/CodexDiscovery.cs` 的副本识别、`src/UpdateChecker.cs` 的中和、界面配色等）
-**未经许可不得复制、分发或用于商业用途**。
-
-简言之：**上游那部分是 MIT，我们改的部分不是。**
+上游项目的署名义务另见 [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md)。
 
 ---
 

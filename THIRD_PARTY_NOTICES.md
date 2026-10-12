@@ -12,16 +12,31 @@ code from CodexPlusPlus is included.
 
 ---
 
-## 本分支（自研改版）的许可说明
+## 本分支的许可说明
 
 本仓库是 [`shibaweidu/codex-desktop-zh`](https://github.com/shibaweidu/codex-desktop-zh)
-的**衍生版本**。许可证按来源分层，请注意区分：
+的**衍生版本**。**整个仓库（含本分支的全部修改）均以 MIT License 开源**，
+见 [`LICENSE`](LICENSE)。
 
-### 1. 上游部分 —— MIT License
+版权分为两段，各自归属：
 
-`src/`、`shared/`、`macos/`、`scripts/`、`tests/`、`build.ps1` 的骨架，
-以及 `LICENSE`、本文件中原有的段落在内的**上游原始内容**，
-均沿用上游的 MIT License，版权归上游作者所有：
+| 范围 | 版权 |
+| --- | --- |
+| 上游原始文件（`src/`、`shared/`、`macos/`、`scripts/`、`tests/`、`build.ps1` 骨架等） | © 2026 Codex Zh Launcher contributors |
+| 本分支的新增与修改 | © 2026 qwertyu7894 |
+
+本分支改动的主要部分：
+
+- `localize/` 整个目录（`CodexZh.ps1`、`AsarInPlace.ps1`、`Rules.ps1`）
+- `src/LocalizationRuntime.cs`（重写为调用本地化脚本）
+- `src/CodexDiscovery.cs` 中「本地化副本识别」相关的新增部分
+- `src/Program.cs` 的全局异常兜底
+- `src/UpdateChecker.cs` 中停用上游自动更新的改动
+- `src/MainWindow.cs`、`src/AboutWindow.cs` 中的配色与标题栏改动
+- `build.ps1` 的品牌参数与嵌入资源改动
+- `scripts/package.py`、`docs/使用说明.template.txt`、`macos/probe.sh`
+
+### 上游 MIT 原文
 
 ```
 MIT License
@@ -39,26 +54,10 @@ The above copyright notice and this permission notice shall be included in all
 copies or substantial portions of the Software.
 ```
 
-> MIT 允许闭源分发衍生版本。**保留 `LICENSE` 与本文件，是在履行 MIT 要求的
-> 署名义务，并不意味着本项目整体开源。**
+### 分发提醒
 
-### 2. 本分支新增与修改的部分 —— 保留所有权利
-
-以下内容由本分支作者编写或修改，**保留所有权利（All rights reserved），
-不对外开源**，未经书面许可不得复制、分发、再许可或用于商业用途：
-
-- `localize/` 整个目录（`CodexZh.ps1`、`AsarInPlace.ps1`、`Rules.ps1`）
-- `src/LocalizationRuntime.cs`（重写为调用本地化脚本）
-- `src/CodexDiscovery.cs` 中「本地化副本识别」相关的新增部分
-- `src/UpdateChecker.cs` 中停用上游自动更新的改动
-- `src/MainWindow.cs`、`src/AboutWindow.cs` 中的配色与标题栏改动
-- `build.ps1` 中嵌入 `localize/` 资源的相关改动
-- `README.md`（本文件顶部的上游段落除外）
-
-### 3. 关于分发的提醒
-
-若以二进制形式分发本项目的构建产物，按 MIT 第 2 条，
-**仍须随附上游的版权声明与许可文本**（可置于关于界面或随附文件中）。
+按 MIT 第 2 条，**以二进制形式分发构建产物时仍须随附版权声明与许可文本**
+（可置于「关于」界面或随附文件中）。
 
 ---
 
