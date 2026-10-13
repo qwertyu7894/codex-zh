@@ -1,4 +1,6 @@
 using System;
+using System.Diagnostics;
+using System.IO;
 using System.Net;
 using System.Net.Http;
 using System.Threading.Tasks;
@@ -21,14 +23,21 @@ namespace CodexZhLauncher
 
     internal static class UpdateChecker
     {
-        // 指向本分支自己的仓库。从 AppInfo.RepositorySlug 派生，避免仓库改名时漏改。
+        // 指向本分支自己的仓库，从 AppInfo.RepositorySlug 派生 —— 仓库改名时不用改这里。
         //
-        // 用 const 而非 static readonly：本项目按 C# 5 编译，const 字符串拼接仍是合法常量表达式；
-        // 而改成 readonly 字段会引出一个 CS0414"已赋值但从未使用"的警告 ——
-        // 这个常量是文档性质的（CheckAsync 已停用、不发起任何请求），留着它只为说明
-        // "将来若重新启用更新检查，该打哪个仓库"。
+        // 注意：GitHub 的 releases/latest **不返回** draft 和 prerelease，
+        // 所以"最新版"天然就是正式版，和 docs/VERSIONING.md 里"不打预发布档"的约定一致。
         private const string LatestReleaseApi =
             "https://api.github.com/repos/" + AppInfo.RepositorySlug + "/releases/latest";
+
+        // 8 秒。api.github.com 在部分网络下根本连不上（国内是常态），
+        // 卡住不如早点回来让用户看到"没查成、去页面手动下"。
+        private static readonly TimeSpan CheckTimeout = TimeSpan.FromSeconds(8);
+
+        // 两个品牌在 Release 里各自对应一个裸 exe 附件，名字与 scripts/package.py 的
+        // BUILDS 一致。自更新只下载"自己这个品牌"的那一个。
+        private const string DefaultAssetName = "CodexZh-Windows-x64.exe";
+        private const string HandoffAssetName = "GPTHanhua.exe";
 
         private sealed class GitHubRelease
         {
@@ -46,24 +55,65 @@ namespace CodexZhLauncher
             public long size { get; set; }
         }
 
-        public static Task<UpdateCheckResult> CheckAsync(string currentVersion)
+        /// <summary>
+        /// 查一次最新版本。**只有用户在「关于」窗口里点「检查更新」才会走到这里** ——
+        /// 工具启动时不再联网（见 MainWindow：启动时的自动检查已拆掉）。
+        ///
+        /// 查不成（网络不通、被墙、还没发过 Release）时**抛异常**而不是假装"已是最新"：
+        /// 假装没问题会让用户以为真没问题，从此再不来看。
+        /// </summary>
+        public static async Task<UpdateCheckResult> CheckAsync(string currentVersion)
         {
-            // 本分支是自研版本，**不跟随上游仓库更新**。
-            //
-            // 上游 LatestReleaseApi 指向 shibaweidu/codex-desktop-zh。若保留自动更新，
-            // 它会提示"发现新版本"并把本程序覆盖成上游版本——而上游那套
-            // inspector 注入逻辑在新版 Codex 上已经用不了，覆盖等于把用户的工具弄坏。
-            //
-            // 保留方法签名以免改动 UI；直接返回"无更新"，同时不发起任何网络请求。
-            AppLog.Write("update.check.disabled （自研版本，已停用上游更新）");
-            return Task.FromResult(new UpdateCheckResult
+            string json;
+            try
             {
-                UpdateAvailable = false,
-                Message = "当前为自研版本，已停用上游自动更新。"
-            });
+                json = await FetchLatestReleaseAsync().ConfigureAwait(false);
+            }
+            catch (Exception ex)
+            {
+                AppLog.Write("update.check.unreachable " + ex.Message);
+                throw new InvalidOperationException(
+                    "拿不到 GitHub 上的版本信息（检查网络或代理后重试）；" +
+                    "也可以直接到 GitHub Releases 页面手动下载。");
+            }
+
+            var result = Parse(json, currentVersion, ExpectedAssetName());
+            AppLog.Write("update.check " + result.Message);
+            return result;
         }
 
-        internal static UpdateCheckResult Parse(string json, string currentVersion)
+        /// <summary>
+        /// 自更新要下载**当前这个品牌**的 exe。
+        ///
+        /// 两个品牌共用同一份源码，只在编译时换了程序集标题（窗口标题、程序属性）。
+        /// 如果一律拉 CodexZh-Windows-x64.exe，那么把 GPTHanhua.exe 发给客户后，
+        /// 客户一更新，窗口标题就会**变成另一个牌子** —— 看着像被换了程序。
+        /// 所以按当前运行的 exe 文件名挑对应附件。
+        /// </summary>
+        private static string ExpectedAssetName()
+        {
+            var fileName = String.Empty;
+            try { fileName = Path.GetFileName(Process.GetCurrentProcess().MainModule.FileName); }
+            catch (Exception ex) { AppLog.Write("update.assetname.failed " + ex.Message); }
+            return String.Equals(fileName, HandoffAssetName, StringComparison.OrdinalIgnoreCase)
+                ? HandoffAssetName
+                : DefaultAssetName;
+        }
+
+        private static async Task<string> FetchLatestReleaseAsync()
+        {
+            ServicePointManager.SecurityProtocol |= SecurityProtocolType.Tls12;
+            using (var client = new HttpClient())
+            {
+                client.Timeout = CheckTimeout;
+                // GitHub API 不带 User-Agent 会直接 403。
+                client.DefaultRequestHeaders.UserAgent.ParseAdd("CodexZhLauncher/" + AppInfo.Version);
+                client.DefaultRequestHeaders.Accept.ParseAdd("application/vnd.github+json");
+                return await client.GetStringAsync(LatestReleaseApi).ConfigureAwait(false);
+            }
+        }
+
+        internal static UpdateCheckResult Parse(string json, string currentVersion, string assetName)
         {
             var release = new JavaScriptSerializer().Deserialize<GitHubRelease>(json);
             if (release == null || release.draft || release.prerelease)
@@ -79,11 +129,13 @@ namespace CodexZhLauncher
             {
                 var assets = release.assets ?? new GitHubAsset[0];
                 executable = assets.FirstOrDefault(item =>
-                    String.Equals(item.name, "CodexZh-Windows-x64.exe", StringComparison.Ordinal));
+                    String.Equals(item.name, assetName, StringComparison.Ordinal));
                 checksums = assets.FirstOrDefault(item =>
                     String.Equals(item.name, "SHA256SUMS.txt", StringComparison.Ordinal));
                 if (executable == null || checksums == null || executable.size <= 0)
-                    throw new InvalidOperationException("GitHub Release 缺少 Windows 更新文件或校验文件。");
+                    throw new InvalidOperationException(
+                        "GitHub Release 里缺少 " + assetName + " 或 SHA256SUMS.txt；" +
+                        "发布时要用 scripts/release.ps1 -Publish，它会一起传上去。");
             }
             return new UpdateCheckResult
             {
@@ -103,20 +155,27 @@ namespace CodexZhLauncher
         internal static string SelfTest()
         {
             const string newer =
-                "{\"tag_name\":\"v0.6.1\",\"html_url\":\"https://github.com/qwertyu7894/codex-zh/releases/tag/v0.6.1\",\"draft\":false,\"prerelease\":false,\"assets\":[{\"name\":\"CodexZh-Windows-x64.exe\",\"browser_download_url\":\"https://github.com/qwertyu7894/codex-zh/releases/download/v0.6.1/CodexZh-Windows-x64.exe\",\"size\":1000},{\"name\":\"SHA256SUMS.txt\",\"browser_download_url\":\"https://github.com/qwertyu7894/codex-zh/releases/download/v0.6.1/SHA256SUMS.txt\",\"size\":298}]}";
+                "{\"tag_name\":\"v0.6.1\",\"html_url\":\"https://github.com/qwertyu7894/codex-zh/releases/tag/v0.6.1\",\"draft\":false,\"prerelease\":false,\"assets\":[{\"name\":\"CodexZh-Windows-x64.exe\",\"browser_download_url\":\"https://github.com/qwertyu7894/codex-zh/releases/download/v0.6.1/CodexZh-Windows-x64.exe\",\"size\":1000},{\"name\":\"GPTHanhua.exe\",\"browser_download_url\":\"https://github.com/qwertyu7894/codex-zh/releases/download/v0.6.1/GPTHanhua.exe\",\"size\":1000},{\"name\":\"SHA256SUMS.txt\",\"browser_download_url\":\"https://github.com/qwertyu7894/codex-zh/releases/download/v0.6.1/SHA256SUMS.txt\",\"size\":298}]}";
             const string current =
                 "{\"tag_name\":\"v0.6.0\",\"html_url\":\"https://github.com/qwertyu7894/codex-zh/releases/tag/v0.6.0\",\"draft\":false,\"prerelease\":false}";
-            var newerResult = Parse(newer, "0.6.0");
-            var currentResult = Parse(current, "0.6.0");
+            var newerResult = Parse(newer, "0.6.0", DefaultAssetName);
+            var currentResult = Parse(current, "0.6.0", DefaultAssetName);
             if (!newerResult.UpdateAvailable || currentResult.UpdateAvailable)
                 throw new InvalidOperationException("更新版本比较自检失败。");
             if (String.IsNullOrWhiteSpace(newerResult.AssetUrl) || String.IsNullOrWhiteSpace(newerResult.ChecksumUrl))
                 throw new InvalidOperationException("更新文件解析自检失败。");
+
+            // 两个品牌必须各取各的附件 —— 取错了会悄悄把用户的牌子换掉。
+            var handoffResult = Parse(newer, "0.6.0", HandoffAssetName);
+            if (!String.Equals(handoffResult.AssetName, HandoffAssetName, StringComparison.Ordinal))
+                throw new InvalidOperationException("按品牌挑选更新文件自检失败。");
+
             try
             {
                 Parse(
                     "{\"tag_name\":\"v9.0.0\",\"html_url\":\"https://example.com/releases/tag/v9.0.0\",\"draft\":false,\"prerelease\":false}",
-                    "0.6.0");
+                    "0.6.0",
+                    DefaultAssetName);
                 throw new InvalidOperationException("外部更新地址未被拒绝。");
             }
             catch (InvalidOperationException ex)

@@ -8,8 +8,8 @@ using System.Windows;
 [assembly: System.Reflection.AssemblyCompany("Codex Localization Enhancer Community")]
 [assembly: System.Reflection.AssemblyProduct(CodexZhLauncher.AppInfo.BrandName)]
 [assembly: System.Reflection.AssemblyCopyright("Copyright 2026")]
-[assembly: System.Reflection.AssemblyVersion("1.2.2.0")]
-[assembly: System.Reflection.AssemblyFileVersion("1.2.2.0")]
+[assembly: System.Reflection.AssemblyVersion("1.3.0.0")]
+[assembly: System.Reflection.AssemblyFileVersion("1.3.0.0")]
 
 namespace CodexZhLauncher
 {
@@ -54,7 +54,13 @@ namespace CodexZhLauncher
             if (args.Length > 0)
             {
                 AttachConsole(AttachParentProcess);
-                Console.OutputEncoding = Encoding.UTF8;
+                // 没有控制台时（被脚本/CI 调起、stdout 是管道）set_OutputEncoding
+                // 会抛 IOException "句柄无效"。它原先写在 try 外面，结果整套命令行
+                // 模式在那种环境下**什么都没跑就死了** —— 而这正是最需要它出诊断的场合。
+                // 设不上编码不影响功能：Output() 会同时把结果写进日志文件。
+                try { Console.OutputEncoding = Encoding.UTF8; }
+                catch (Exception ex) { AppLog.Write("console.encoding.failed " + ex.Message); }
+
                 try
                 {
                     RunCommand(args);

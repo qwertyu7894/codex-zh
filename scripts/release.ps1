@@ -135,7 +135,9 @@ Good ('标签 ' + $tagName + ' 尚未使用')
 
 # ------------------------------------------------------------ 2. 版本校验
 Step '版本一致性校验'
-& (Join-Path $PSScriptRoot 'verify-version.ps1') -Tag $tagName
+# -SkipStamp：这一步在编译**之前**，dist 里还是上一版的构建戳，拿它比对必然误报。
+# 编译完之后 scripts/package.py 会拿新戳再对一次账，两次都不放水。
+& (Join-Path $PSScriptRoot 'verify-version.ps1') -Tag $tagName -SkipStamp
 if ($LASTEXITCODE -ne 0) { Die '版本号对不上，停下来。' }
 Good '版本号一致'
 
@@ -200,9 +202,28 @@ if ($LASTEXITCODE -ne 0) {
 Good '标签指向的提交自称同一版本'
 
 # ------------------------------------------------------------- 5. 发布
+#
+# 附件不只是给人下载的 zip。自动更新（src/UpdateChecker.cs + UpdateInstaller.cs）
+# 还要从 Release 里直接取三样东西，少一样用户点「立即更新」就会失败：
+#   · 当前品牌的裸 exe —— 名字必须是 CodexZh-Windows-x64.exe / GPTHanhua.exe
+#   · SHA256SUMS.txt   —— 合并了两个 exe 的校验值，安装前用它验 SHA-256
+# 两个 exe 在 dist\，校验文件由 scripts/package.py 写在 release\ 根下。
 $assets = @()
+$missing = @()
 if (Test-Path -LiteralPath $OutDir) {
-    $assets = @(Get-ChildItem -LiteralPath $OutDir -Filter ('*-v' + $Version + '-*.zip') -ErrorAction SilentlyContinue)
+    $assets += @(Get-ChildItem -LiteralPath $OutDir -Filter ('*-v' + $Version + '-*.zip') -ErrorAction SilentlyContinue)
+    $sumPath = Join-Path $OutDir 'SHA256SUMS.txt'
+    if (Test-Path -LiteralPath $sumPath) { $assets += Get-Item -LiteralPath $sumPath } else { $missing += 'release\SHA256SUMS.txt' }
+}
+else { $missing += 'release\ 目录' }
+
+$distDir = Join-Path $Root 'dist'
+foreach ($name in @('CodexZh-Windows-x64.exe', 'GPTHanhua.exe')) {
+    $exePath = Join-Path $distDir $name
+    if (Test-Path -LiteralPath $exePath) { $assets += Get-Item -LiteralPath $exePath } else { $missing += ('dist\' + $name) }
+}
+if ($missing.Count -gt 0) {
+    Write-Host ('    ! 缺少 ' + ($missing -join '、') + ' —— 自动更新会拉不到文件。') -ForegroundColor Yellow
 }
 
 Write-Host ''
