@@ -65,6 +65,43 @@ namespace CodexZhLauncher
             return unchecked((uint)process.Id);
         }
 
+        /// <summary>
+        /// 注入路线专用：**一律用 Process.Start 直接跑 exe**（即"未打包运行"），
+        /// 商店版也**不走** ActivateApplication。
+        ///
+        /// 为什么：真机实测只有这条能注入成功 —— 直接启动 exe，Chromium 的
+        /// `--remote-debugging-port` 才会开。走包激活时参数能否传进去尚未验证。
+        /// 代价是丢包标识（应用自带更新器失效、userData 从 MSIX 重定向目录移回
+        /// `%APPDATA%\Codex`）—— 但这与磁盘补丁路线的副本本来就是同一个代价。
+        /// </summary>
+        public static uint LaunchUnpackaged(CodexInstall install, string arguments)
+        {
+            if (install == null || !install.IsValid)
+                throw new InvalidOperationException("未检测到可用的 Codex Desktop。 ");
+
+            var process = new Process();
+            process.StartInfo = new ProcessStartInfo
+            {
+                FileName = install.ExecutablePath,
+                Arguments = arguments,
+                UseShellExecute = false,
+                WorkingDirectory = install.InstallLocation,
+                // Codex 自己会往 stdout/stderr 喷大量日志（AppServerConnection、sparkle 之类）。
+                // 不重定向的话，命令行跑工具时自己的输出会被整个淹掉。
+                // 重定向 + 空处理器 = 丢弃它的输出，同时把管道排空、不会把子进程卡住。
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                CreateNoWindow = true
+            };
+            process.OutputDataReceived += delegate { };
+            process.ErrorDataReceived += delegate { };
+
+            if (!process.Start()) throw new InvalidOperationException("Codex Desktop 启动失败。");
+            process.BeginOutputReadLine();
+            process.BeginErrorReadLine();
+            return unchecked((uint)process.Id);
+        }
+
         public static int ReserveLoopbackPort()
         {
             var listener = new TcpListener(IPAddress.Loopback, 0);
@@ -86,6 +123,26 @@ namespace CodexZhLauncher
                 "--remote-debugging-address=127.0.0.1",
                 "--remote-debugging-port=" + rendererPort,
                 "--inspect=127.0.0.1:" + inspectorPort,
+                "--lang=" + locale
+            });
+        }
+
+        /// <summary>
+        /// 运行时注入路线用的启动参数。
+        ///
+        /// 与 <see cref="BuildArguments"/> 的唯一区别：**不带 `--inspect`**。
+        /// 那条路（连 Electron 主进程）已被新版 Codex 的 Electron fuse
+        /// `EnableNodeCliInspectArguments` 关闭，带上也只是被静默忽略 —— 实测
+        /// 端口根本不会开。界面注入走的是渲染进程的 `--remote-debugging-port`，
+        /// 那是 **Chromium 的开关，不在 fuse 管辖内**（真机实测两版仍可用）。
+        /// </summary>
+        public static string BuildInjectionArguments(int rendererPort, string locale)
+        {
+            return String.Join(" ", new[]
+            {
+                "--remote-debugging-address=127.0.0.1",
+                "--remote-debugging-port=" + rendererPort,
+                "--remote-allow-origins=http://127.0.0.1:" + rendererPort,
                 "--lang=" + locale
             });
         }

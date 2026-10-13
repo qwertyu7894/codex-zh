@@ -44,6 +44,11 @@ param(
     [string]$Language = 'zh-CN',
     [string]$Target,
     [string]$Root,
+    # 只（重新）创建快捷方式然后退出。运行时注入路线每次启动成功后都会调它，
+    # 把「ChatGPT 中文版」从"指向本地化副本"改成"指向工具自身"。
+    [switch]$Shortcuts,
+    # 配合 -Shortcuts：快捷方式要指向的可执行文件（通常是本工具自己）。
+    [string]$LauncherPath,
     [switch]$Quiet          # GUI 调用时用：抑制"用法"帮助块，只留状态与结果
 )
 
@@ -253,6 +258,10 @@ function New-AppShortcuts {
         [Parameter(Mandatory)][string]$WorkDir,
         [Parameter(Mandatory)][string]$Locale,
         [string]$Name = 'ChatGPT 中文版',
+        # 显式指定快捷方式的参数与描述。留空则用老行为（--lang=<语言>，指向本地化副本）。
+        # 运行时注入路线会传 '--launch-zh' —— 让快捷方式指向工具自身。
+        [string]$Arguments = '',
+        [string]$Description = '',
         [switch]$Apply
     )
 
@@ -282,10 +291,13 @@ function New-AppShortcuts {
             if (-not (Test-Path -LiteralPath $dir)) { New-Item -ItemType Directory -Path $dir -Force | Out-Null }
             $sc = $shell.CreateShortcut($t)
             $sc.TargetPath = $ExePath
-            $sc.Arguments = '--lang=' + $Locale
             $sc.WorkingDirectory = $WorkDir
             $sc.IconLocation = $iconFile + ',0'
-            $sc.Description = 'ChatGPT 中文版（本地化副本，与商店原版共存）'
+            if ([string]::IsNullOrWhiteSpace($Arguments)) { $sc.Arguments = '--lang=' + $Locale }
+            else { $sc.Arguments = $Arguments }
+            if ([string]::IsNullOrWhiteSpace($Description)) {
+                $sc.Description = 'ChatGPT 中文版（本地化副本，与商店原版共存）'
+            } else { $sc.Description = $Description }
             $sc.Save()
             $made += $t
         } catch {
@@ -693,6 +705,29 @@ if (-not $targetApp) {
     if (Test-Path -LiteralPath (Join-Path $copyDir 'resources\app.asar')) {
         $targetApp = $copyDir
     }
+}
+
+# -Shortcuts：只（重新）创建快捷方式就退出。运行时注入路线每次启动成功后调它，
+# 把「ChatGPT 中文版」从"指向本地化副本"改成"指向工具自身"。
+if ($Shortcuts) {
+    $exeForShortcut = if (-not [string]::IsNullOrWhiteSpace($LauncherPath)) { $LauncherPath }
+                      else { Join-Path (Join-Path $Root 'app') 'ChatGPT.exe' }
+    $workForShortcut = if (-not [string]::IsNullOrWhiteSpace($LauncherPath)) { Split-Path $LauncherPath -Parent }
+                       else { Join-Path $Root 'app' }
+    if (-not (Test-Path -LiteralPath $exeForShortcut)) {
+        Write-Err ("快捷方式目标不存在：{0}" -f $exeForShortcut)
+        exit 1
+    }
+    $sc = New-AppShortcuts -ExePath $exeForShortcut -WorkDir $workForShortcut -Locale $Language -Apply `
+                           -Arguments '--launch-zh' `
+                           -Description 'ChatGPT 中文版（运行时注入，跟随最新版 Codex）'
+    if ($sc.Status -eq 'ok') {
+        foreach ($m in $sc.Made) { Write-Ok ("已创建快捷方式：{0}" -f $m) }
+        Write-Info ("目标：{0} --launch-zh" -f $exeForShortcut)
+        exit 0
+    }
+    Write-Err '快捷方式创建失败。'
+    exit 1
 }
 
 if ($Status -or (-not $Install -and -not $Launch)) {

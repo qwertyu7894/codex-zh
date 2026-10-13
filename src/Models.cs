@@ -46,6 +46,18 @@ namespace CodexZhLauncher
         public string LocaleDetail;
         public string MenuDetail;
 
+        /// <summary>本次走的哪条路线：<c>"inject"</c>（运行时注入）/ <c>"patch"</c>（磁盘补丁）。</summary>
+        public string Mode;
+
+        /// <summary>注入路线的详情，形如 <c>patchedConfigs=1; target=page; port=54321</c>。</summary>
+        public string InjectionDetail;
+
+        /// <summary>注入失败并回退到磁盘补丁时的原因；注入成功时为空。</summary>
+        public string FallbackReason;
+
+        /// <summary>语言来源：<c>"SYSTEM"</c>（跟随系统语言）/ <c>"OVERRIDE"</c>（写入 localeOverride）。</summary>
+        public string LocaleSource;
+
         public bool Complete
         {
             get { return Started && LocaleApplied && MenuApplied; }

@@ -25,9 +25,26 @@ namespace CodexZhLauncher
             return script;
         }
 
+        /// <summary>默认强制 <c>locale_source='SYSTEM'</c>（让 App 跟随系统语言）。</summary>
         public static string BuildI18nBootstrap()
         {
-            return ReadResource(I18nBootstrapResource);
+            return BuildI18nBootstrap("SYSTEM");
+        }
+
+        /// <summary>
+        /// localeSource 传 <c>null</c> 表示**不碰** locale_source —— 交回 App 默认，
+        /// 由 localeOverride 兜底。
+        ///
+        /// 用在哪里：客户是**非中文 Windows** 时，'SYSTEM' 会解析成 en-US、界面回英文。
+        /// 所以那种机器上要传 null，并另跑 locale-script.js 写 localeOverride=zh-CN。
+        /// 中文 Windows 上传 "SYSTEM" 即可（实测界面和原生菜单会一起中文化）。
+        /// </summary>
+        public static string BuildI18nBootstrap(string localeSource)
+        {
+            var script = ReadResource(I18nBootstrapResource)
+                .Replace("'__LOCALE_SOURCE__'", Serializer.Serialize(localeSource));
+            EnsureResolved(script, "__LOCALE_SOURCE__");
+            return script;
         }
 
         public static string BuildMenuScript()
@@ -61,6 +78,16 @@ namespace CodexZhLauncher
                 bootstrap.IndexOf("getDynamicConfig", StringComparison.Ordinal) < 0 ||
                 bootstrap.IndexOf("getLayer", StringComparison.Ordinal) < 0)
                 throw new InvalidOperationException("i18n 引导脚本缺少必要的动态配置补丁。 ");
+            // locale_source 占位符：注入前必须被替换掉，且 "SYSTEM" / null 两种取值都要能产出。
+            if (bootstrap.IndexOf("__LOCALE_SOURCE__", StringComparison.Ordinal) >= 0)
+                throw new InvalidOperationException("i18n 引导脚本的 locale_source 占位符未被替换。 ");
+            if (bootstrap.IndexOf("\"SYSTEM\"", StringComparison.Ordinal) < 0)
+                throw new InvalidOperationException("i18n 引导脚本没有拿到 SYSTEM。 ");
+            var noLocaleSource = BuildI18nBootstrap(null);
+            if (noLocaleSource.IndexOf("__LOCALE_SOURCE__", StringComparison.Ordinal) >= 0)
+                throw new InvalidOperationException("locale_source=null 时占位符仍未被替换。 ");
+            if (noLocaleSource.IndexOf("var localeSource = null;", StringComparison.Ordinal) < 0)
+                throw new InvalidOperationException("locale_source=null 没有被正确序列化。 ");
             if (locale.IndexOf("localeOverride", StringComparison.Ordinal) < 0 ||
                 locale.IndexOf("vscode://codex/set-setting", StringComparison.Ordinal) < 0)
                 throw new InvalidOperationException("语言脚本缺少官方设置接口。 ");
