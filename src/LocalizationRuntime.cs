@@ -78,7 +78,7 @@ namespace CodexZhLauncher
         /// 对它反射设 TargetPath 会失败（它只暴露 <c>Object</c> 的成员）。
         /// 实测就是那样静默失败的：快捷方式根本没被创建出来。
         /// </summary>
-        public static async Task<bool> RefreshShortcutsAsync()
+        public static async Task<bool> RefreshShortcutsAsync(Action<string> onProgress)
         {
             try
             {
@@ -93,6 +93,11 @@ namespace CodexZhLauncher
 
                 var ok = ContainsAny(lines, "[成功]");
                 AppLog.Write("shortcut.refresh ok=" + ok + " target=" + launcherPath);
+                if (ok && onProgress != null)
+                {
+                    try { onProgress("「ChatGPT 中文版」快捷方式已指向本工具 —— 以后双击它就是中文。"); }
+                    catch { }
+                }
                 return ok;
             }
             catch (Exception ex)
