@@ -14,6 +14,13 @@ param(
 $ErrorActionPreference = 'Stop'
 $root = Split-Path $PSScriptRoot -Parent
 
+# 编译前先过版本一致性闸门（版本号唯一来源 vs Program.cs 的两行程序集版本）。
+# 不一致就别编译 —— 免得打出一个"名字是 vX、内容是 vY"的包。
+# 构建戳那一项要等编译完才有意义，所以这里跳过；scripts/package.py 会在
+# 打包前再对一次账，两次都不放水。
+& (Join-Path $PSScriptRoot 'verify-version.ps1') -SkipStamp
+if ($LASTEXITCODE -ne 0) { throw '版本号对不上，已中止发布。' }
+
 & (Join-Path $root 'build.ps1') -Configuration Release `
     -Brand 'Codex 汉化增强工具' -OutputName 'CodexZh-Windows-x64.exe'
 

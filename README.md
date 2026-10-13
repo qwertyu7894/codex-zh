@@ -9,6 +9,10 @@
 当前版本见 [`CHANGELOG.md`](CHANGELOG.md)，
 版本号唯一来源是 `src/AppInfo.cs` 的 `AppInfo.Version`。
 
+版本号怎么进位、标签怎么打、发一次版走哪些步 —— 见
+[`docs/VERSIONING.md`](docs/VERSIONING.md)。发布前跑
+`.\scripts\verify-version.ps1` 可以确认版本号没对不上。
+
 ---
 
 ## ⚠️ 构建产物文件名必须为纯 ASCII
@@ -171,6 +175,8 @@ Codex 什么时候更新，下次打开就是最新版 + 中文。**不需要任
 | `src/` | Windows 桌面端（C# / WPF，无 XAML，UI 全部代码构建） |
 | `macos/` | macOS 端（Swift）—— **本分支未适配，仍是上游原样** |
 | `shared/` | 注入载荷（`i18n-bootstrap.js`、`locale-script.js` 等）—— **运行时注入路线正在使用** |
+| `scripts/` | 构建 / 打包 / 发布：`publish.ps1`、`release.ps1`、`verify-version.ps1`、`package.py` |
+| `docs/` | [版本与发布规范](docs/VERSIONING.md)、[发布指南](docs/PUBLISHING.md)、使用说明模板 |
 
 ---
 
