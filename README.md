@@ -151,7 +151,23 @@ Integrity check failed for asar archive
 --launch-zh-patch-only      只走磁盘补丁
 --self-test                 构建期自检
 --diagnostics               打印探测到的安装信息
+--diagnose-inject           注入起不来时用：只读收集原因，见下
 ```
+
+### `--diagnose-inject`
+
+有些机器上**运行时注入永远起不来** —— 直接启动
+`C:\Program Files\WindowsApps\...\ChatGPT.exe` 报"拒绝访问"，于是那台机器
+只能用约 2 GB 的本地化副本。这个命令**什么都不改、也不启动 Codex**，
+只把能解释"为什么被拒绝"的事实一次收齐：
+
+- 包是注册给**哪个 Windows 账户**的（`Get-AppxPackage`，当前用户 + 所有用户）
+- exe 与安装目录的 **ACL**（能不能 Execute）、读权限探测
+- **Smart App Control**、**代码完整性策略**、**AppLocker**、杀毒软件
+- 日志里最近的 `inject.*` 记录（含异常类型与 HRESULT）
+
+输出同时写进 `%LOCALAPPDATA%\CodexZhLauncher\logs\launcher.log`，
+让用户把那个文件发回来即可。
 
 ---
 

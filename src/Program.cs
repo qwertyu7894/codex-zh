@@ -127,6 +127,17 @@ namespace CodexZhLauncher
                 return;
             }
 
+            if (command == "--diagnose-inject")
+            {
+                // 必须用**原始安装**：注入路线要启动的就是它。
+                // DetectAsync 是"副本优先"，在有本地化副本的机器上会指向副本，
+                // 而那台机器要诊断的恰恰是原始安装为什么起不来。
+                InjectionDiagnostics.Run(
+                    SourceInstallOrFallback(install),
+                    delegate(string message) { Output(message); });
+                return;
+            }
+
             if (command == "--launch-zh" || command == "--launch-en" ||
                 command == "--launch-zh-inject-only" || command == "--launch-zh-patch-only")
             {
@@ -164,7 +175,8 @@ namespace CodexZhLauncher
             }
 
             throw new ArgumentException(
-                "未知参数。可用参数：--diagnostics、--self-test、--launch-zh、--launch-en、" +
+                "未知参数。可用参数：--diagnostics、--diagnose-inject（注入起不来时用）、" +
+                "--self-test、--launch-zh、--launch-en、" +
                 "--launch-zh-inject-only（只验注入）、--launch-zh-patch-only（只验磁盘补丁）");
         }
 

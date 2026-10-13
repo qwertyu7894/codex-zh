@@ -50,6 +50,19 @@ Releases，查到新版本可以一键下载、校验 SHA-256、覆盖并重启�
 - 选过「否」→ 记进 `%LOCALAPPDATA%\CodexZhLauncher\settings.ini`，以后不再问。
 - 选过「是」但当时删不掉 → 下次启动**静默重试**，成功说一声，失败也不再弹框。
 
+### 新增：`--diagnose-inject` 诊断命令
+
+有些机器上运行时注入**永远起不来**（客户机实测：直接启动
+`WindowsApps\...\ChatGPT.exe` 报"拒绝访问"），那台机器就只能靠约 2 GB 的
+本地化副本。这个命令**什么都不改、也不启动 Codex**，只把能解释"为什么被拒绝"
+的事实一次收齐：包注册给哪个 Windows 账户、exe 与目录的 ACL 和读权限探测、
+Smart App Control / 代码完整性策略 / AppLocker / 杀毒软件、以及日志里带
+异常类型与 HRESULT 的历史失败记录。输出同时写进 `launcher.log`，直接发回即可。
+
+配套：注入失败的日志从只记 `ex.Message`（"拒绝访问。"）改成
+`类型 0xHRESULT 消息`并带内层异常 —— 权限不足、AppLocker、杀软三者
+只看那句话是分不出来的。
+
 ### 修复：没有控制台时命令行模式直接崩
 
 `Console.OutputEncoding = Encoding.UTF8` 在 stdout 是管道、或进程没有控制台
