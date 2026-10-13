@@ -22,21 +22,26 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\build.ps1
 powershell -NoProfile -ExecutionPolicy Bypass -File .\test-shutdown.ps1
 ```
 
-然后运行：
+然后运行（`build.ps1` 默认产出的 exe 名是 `CodexZh-Windows-x64.exe`）：
 
 ```powershell
-.\dist\Codex-Zh-Launcher-Windows-x64.exe --self-test
-.\dist\Codex-Zh-Launcher-Windows-x64.exe --diagnostics
+.\dist\CodexZh-Windows-x64.exe --self-test
+.\dist\CodexZh-Windows-x64.exe --diagnostics
 ```
 
-macOS 上运行：
+改了版本号或标签就多跑一步：
 
-```bash
-bash scripts/test-macos.sh
-bash scripts/build-macos.sh "$(uname -m)"
+```powershell
+.\scripts\verify-version.ps1          # 版本一致性闸门，退出码必须是 0
 ```
 
 `test-shutdown.ps1` 只使用临时测试进程，不应关闭用户当前运行的真实 Codex。
+
+> `macos/` 是上游原样保留、**本分支未适配** —— `scripts/test-macos.sh` 与
+> `scripts/build-macos.sh` 在本分支没有验证过，别当成可用的检查。
+
+**本仓库没有 CI**，上面这些都在本地跑。发版流程见
+[`docs/VERSIONING.md`](docs/VERSIONING.md)。
 
 ## 提交菜单翻译
 
@@ -66,7 +71,7 @@ bash scripts/build-macos.sh "$(uname -m)"
 - 描述受影响的 Codex 版本和安装类型。
 - UI 变更附上更新前后的截图。
 - 不要提交 `dist/`、`obj/`、日志、Codex 安装文件或用户数据。
-- 确保自动构建、自检和隔离关闭测试全部通过。
+- 确保本地构建、自检和隔离关闭测试全部通过（本仓库没有 CI）。
 
 ## 报告问题
 
