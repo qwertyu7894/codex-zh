@@ -591,14 +591,16 @@ namespace CodexZhLauncher
                 lastLaunchReport = report;
                 if (String.Equals(report.Mode, "patch", StringComparison.Ordinal))
                 {
-                    AppendLog("本次走的是**磁盘补丁**路线" +
+                    // 注意：日志面板是纯文本，不渲染 Markdown —— 别在这里用 **强调**，
+                    // 星号会被原样打出来（踩过）。
+                    AppendLog("本次走的是磁盘补丁路线" +
                         (String.IsNullOrWhiteSpace(report.FallbackReason)
                             ? "。"
                             : "（运行时注入未成功：" + report.FallbackReason + "）"), Warning);
                 }
                 else
                 {
-                    AppendLog("本次走的是**运行时注入**路线 —— 汉化作用在当前版本上，" +
+                    AppendLog("本次走的是运行时注入路线 —— 汉化作用在当前版本上，" +
                         "Codex 升级后不需要重打。" + (String.IsNullOrWhiteSpace(report.InjectionDetail) ? "" : "（" + report.InjectionDetail + "）"), TextSecondary);
                 }
                 AppendLog("界面语言：" + (report.LocaleApplied ? "已确认中文" : "未确认"), report.LocaleApplied ? Accent : Warning);
@@ -629,7 +631,8 @@ namespace CodexZhLauncher
             if (lastLaunchReport != null && lastLaunchReport.Complete)
             {
                 await DetectInstallAsync();
-                await LocalizationRuntime.RefreshShortcutsAsync();
+                await LocalizationRuntime.RefreshShortcutsAsync(
+                    delegate(string message) { AppendLog(message, TextSecondary); });
             }
 
             // 每会话只问一次。用户若选"否"，下次开工具还会问 —— 因为 2GB 一直占着。
