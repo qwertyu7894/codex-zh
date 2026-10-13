@@ -21,6 +21,7 @@ import io
 import os
 import re
 import shutil
+import subprocess
 import sys
 import zipfile
 
@@ -48,6 +49,24 @@ def read_version(root):
     if not m:
         raise SystemExit('在 %s 里找不到 AppInfo.Version' % path)
     return m.group(1)
+
+
+def read_exe_version(path):
+    """读 exe 里嵌的文件版本（形如 1.3.0.0）。读不到返回 None。
+
+    为什么需要它：buildinfo.json 只记**最后一次**编译的那个文件，所以单独跑一次
+    build.ps1（只编一个品牌）会让另一个品牌留在旧版本，而版本对账照样通过 ——
+    发布包里就会出现"包名 1.3.0、里面是 1.2.2"的 exe。客户端拿到那个会中招。
+    """
+    script = "(Get-Item -LiteralPath '%s').VersionInfo.FileVersion" % path.replace("'", "''")
+    try:
+        out = subprocess.check_output(
+            ['powershell', '-NoProfile', '-NonInteractive', '-Command', script],
+            stderr=subprocess.STDOUT)
+    except Exception as exc:
+        print('  ! 读不到 %s 的文件版本：%s' % (os.path.basename(path), exc))
+        return None
+    return out.decode('utf-8', 'replace').strip() or None
 
 
 def render_readme(root, brand, exename, version):
@@ -101,8 +120,30 @@ def main():
 
     print('版本号对账通过：%s（构建于 %s）\n' % (version, stamp.get('builtAt', '?')))
 
+    # 第二道对账：逐个读 dist 里每个 exe **自己嵌的**文件版本。
+    # buildinfo.json 只记最后一次构建的那个文件，所以单独跑一次 build.ps1 就会让
+    # 另一个品牌留在旧版本，而上面那次对账照样通过。跑 .\scripts\publish.ps1
+    # 会两个品牌一起重编，那才是正常的发版路径。
+    stale = []
+    for brand, exename, prefix in BUILDS:
+        exe_path = os.path.join(args.dist, exename)
+        if not os.path.exists(exe_path):
+            continue
+        exe_version = read_exe_version(exe_path)
+        if exe_version is None:
+            print('  ! 读不到 %s 的文件版本，跳过这项检查' % exename)
+        elif not exe_version.startswith(version + '.'):
+            stale.append('%s（文件版本 %s）' % (exename, exe_version))
+    if stale:
+        print('拒绝打包：dist 里有旧产物\n  ' + '\n  '.join(stale) +
+              '\n  源码版本是 %s —— 打出来的包会名不副实。\n'
+              '  跑 .\\scripts\\publish.ps1 会把两个品牌一起重编。' % version,
+              file=sys.stderr)
+        return 1
+
     os.makedirs(args.out, exist_ok=True)
     built = 0
+    checksum_lines = []
 
     for brand, exename, prefix in BUILDS:
         src = os.path.join(args.dist, exename)
@@ -128,6 +169,7 @@ def main():
         with io.open(os.path.join(d, 'SHA256SUMS.txt'), 'w',
                      encoding='utf-8-sig', newline='') as f:
             f.write(digest + '  ' + exename + '\r\n')
+        checksum_lines.append(digest + '  ' + exename)
 
         # MIT 第 2 条：分发二进制时必须随附版权声明与许可文本。
         # 少了这个文件，客户端拿到的就是"无证分发"。
@@ -149,6 +191,18 @@ def main():
         print('%-38s %8d 字节  %s  SHA256=%s...'
               % (folder + '.zip', os.path.getsize(zpath), brand, digest[:20]))
         built += 1
+
+    # Release 附件用的**合并**校验文件，两个品牌的 exe 放同一个文件、一行一个。
+    #
+    # 文件名必须正好是 SHA256SUMS.txt：自动更新（src/UpdateChecker.cs）要求 Release
+    # 里有一个同名校验附件，再用一个"按行找自己那个 exe"的解析器（ParseExpectedHash）。
+    # 所以两个品牌合成一份即可，不用分两个文件、也就不会撞名。
+    if checksum_lines:
+        combined = os.path.join(args.out, 'SHA256SUMS.txt')
+        with io.open(combined, 'w', encoding='ascii', newline='') as f:
+            for line in checksum_lines:
+                f.write(line + '\r\n')
+        print('已写出 Release 校验文件 -> %s（%d 行）' % (combined, len(checksum_lines)))
 
     # 交付副本：用户直接从音乐文件夹把单个 exe 发给客户，
     # 所以这里必须跟着一起更新，否则源码是新版、发出去的还是旧版。

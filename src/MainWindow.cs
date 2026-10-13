@@ -54,7 +54,6 @@ namespace CodexZhLauncher
         private int missingPollCount;
         private int lastRunningCount = -1;
         private string shutdownFailureDetail;
-        private bool updatePromptShown;
         private bool copyCleanupAsked;
 
         [DllImport("dwmapi.dll")]
@@ -89,7 +88,9 @@ namespace CodexZhLauncher
                 AppendLog("工具已启动，正在检测 Codex Desktop。", TextSecondary);
                 await DetectInstallAsync();
                 stateTimer.Start();
-                await CheckForUpdatesOnStartupAsync();
+                // 本工具**不在启动时联网**。更新由用户自己触发，见「关于与更新」。
+                // 代价是不主动点就不知道有新版本，所以这里明说一句。
+                AppendLog("想检查新版本：点右上角「关于与更新」。", TextSecondary);
             };
             Closed += delegate { stateTimer.Stop(); };
         }
@@ -623,6 +624,11 @@ namespace CodexZhLauncher
                 UpdatePresentation();
             }
 
+            // 本次走的是哪条路线 —— 副本要不要清理取决于它，所以先记下来：
+            // 下面的 await 会让状态轮询跑起来，而轮询在 Codex 退出时会把
+            // lastLaunchReport 清成 null。
+            var routeMode = lastLaunchReport == null ? null : lastLaunchReport.Mode;
+
             // 启动成功之后的收尾（刻意放在 finally 之外：
             // C# 5 不允许在 finally 子句里 await，CS1984）：
             // 重新探测 —— 回退路线可能刚把副本重拷过，版本号变了。
@@ -634,33 +640,67 @@ namespace CodexZhLauncher
                 await DetectInstallAsync();
             }
 
-            // 每会话只问一次。用户若选"否"，下次开工具还会问 —— 因为 2GB 一直占着。
+            // 每会话最多看一次；"以后不再问"由 AppSettings 持久化。
             if (!copyCleanupAsked)
             {
                 copyCleanupAsked = true;
-                OfferCopyCleanup();
+                OfferCopyCleanup(routeMode);
             }
         }
 
         /// <summary>
         /// 询问是否删除旧的本地化副本。
         ///
+        /// **只在副本确实用不上的时候才问。** 副本是磁盘补丁路线的必需品：本机
+        /// 注入能用时才多余。有些机器上注入永远起不来（实测客户机报"拒绝访问"），
+        /// 汉化**每次都要靠这份副本** —— 那种情况下既不该问、更不能删，删了下次
+        /// 还得重拷 2 GB。
+        ///
+        /// 用户答复会持久化（见 <see cref="AppSettings"/>）：
+        ///   · 选过"否" → 以后不再问；
+        ///   · 选过"是"但当时删不掉（Codex 正跑在副本里，文件被占用）→ 下次启动
+        ///     静默重试，不再弹框打扰。
+        ///
         /// **边界极重要**：只删 <c>%USERPROFILE%\.codex\codex-zh\</c> 这一个目录，
         /// **绝不碰** <c>%USERPROFILE%\.codex\config.toml</c> —— 那是 localeOverride 所在，
         /// 删了原生菜单就回英文。两者是同级不同项，config.toml 在上一层，不在被删目录里。
         /// </summary>
-        private void OfferCopyCleanup()
+        private void OfferCopyCleanup(string launchMode)
         {
             if (!LocalizationRuntime.HasLocalizedCopy) return;
 
             var root = LocalizationRuntime.LocalizedRoot;
+            var decision = AppSettings.Get(AppSettings.CopyCleanupKey);
+
+            // 选过"否"：不再提。
+            if (String.Equals(decision, AppSettings.CopyCleanupDeclined, StringComparison.Ordinal))
+                return;
+
+            // 本次汉化走的是磁盘补丁 —— 中文版 Codex 正跑在这份副本里。
+            // 此刻删不掉（文件被占用），而且副本正是汉化的必需品。
+            if (String.Equals(launchMode, "patch", StringComparison.Ordinal))
+            {
+                AppendLog("本机运行时注入不可用，汉化靠的是本地化副本 —— 这份副本不能删，" +
+                    "删了下次要重拷约 2 GB。", TextSecondary);
+                AppLog.Write("copy.cleanup.skip route=patch");
+                return;
+            }
+
+            // 选过"是"但上次没删成：静默重试。成功说一声，失败也不打扰。
+            if (String.Equals(decision, AppSettings.CopyCleanupApproved, StringComparison.Ordinal))
+            {
+                TryDeleteCopy(root, false);
+                return;
+            }
+
             var answer = MessageBox.Show(
                 this,
                 "检测到旧的本地化副本：\n\n" + root +
                 "\n\n它是磁盘补丁方案复制出来的整份 Codex（约 2 GB）。\n" +
-                "改用运行时注入之后，这份副本已经用不上了。\n\n" +
+                "本机已经能用运行时注入，这份副本用不上了。\n\n" +
                 "是否删除以释放磁盘空间？\n\n" +
-                "（只删上面这一个目录；你的 Codex 配置、登录状态和聊天记录都不在里面）",
+                "（只删上面这一个目录；你的 Codex 配置、登录状态和聊天记录都不在里面）\n\n" +
+                "选「否」以后不再询问。",
                 "清理旧的本地化副本",
                 MessageBoxButton.YesNo,
                 MessageBoxImage.Question,
@@ -668,10 +708,22 @@ namespace CodexZhLauncher
 
             if (answer != MessageBoxResult.Yes)
             {
-                AppendLog("已保留本地化副本（约 2 GB）。", TextSecondary);
+                AppSettings.Set(AppSettings.CopyCleanupKey, AppSettings.CopyCleanupDeclined);
+                AppendLog("已保留本地化副本（约 2 GB），以后不再询问。", TextSecondary);
+                AppLog.Write("copy.cleanup.declined");
                 return;
             }
 
+            AppSettings.Set(AppSettings.CopyCleanupKey, AppSettings.CopyCleanupApproved);
+            TryDeleteCopy(root, true);
+        }
+
+        /// <summary>
+        /// 删副本。删不掉时：用户刚点过"是"那一次说清原因和手工做法；
+        /// 之后的重试只写日志 —— 每次开工具都弹一遍"删不掉"正是要消灭的骚扰。
+        /// </summary>
+        private void TryDeleteCopy(string root, bool explainFailure)
+        {
             AppendLog("正在删除本地化副本（约 2 GB，可能需要一会儿）…", TextSecondary);
             try
             {
@@ -681,8 +733,17 @@ namespace CodexZhLauncher
             }
             catch (Exception ex)
             {
-                AppendLog("删除本地化副本失败：" + ex.Message, Warning);
                 AppLog.Write("copy.cleanup.failed " + ex.Message);
+                if (explainFailure)
+                {
+                    AppendLog("删除没成功：" + ex.Message, Warning);
+                    AppendLog("多半是中文版 Codex 正跑在这份副本里、文件被占用。关掉 Codex 后" +
+                        "直接删掉这个目录即可，之后不会再提示：" + root, TextSecondary);
+                }
+                else
+                {
+                    AppendLog("本地化副本仍删不掉（" + ex.Message + "），已跳过，不再提示。", TextSecondary);
+                }
             }
             UpdatePresentation();
         }
@@ -806,61 +867,6 @@ namespace CodexZhLauncher
             catch (Exception ex)
             {
                 AppLog.Write("icon.load.failed " + ex.Message);
-            }
-        }
-
-        private async Task CheckForUpdatesOnStartupAsync()
-        {
-            try
-            {
-                var result = await UpdateChecker.CheckAsync(AppInfo.Version);
-                AppLog.Write("update.check " + result.Message);
-                if (!result.UpdateAvailable || updatePromptShown || !IsVisible) return;
-                updatePromptShown = true;
-                AppendLog(result.Message + "，可从 GitHub Releases 下载。", Restart);
-                var choice = MessageBox.Show(
-                    this,
-                    result.Message + "。\n\n是否立即下载、覆盖并重启工具？",
-                    "发现新版本",
-                    MessageBoxButton.YesNo,
-                    MessageBoxImage.Information);
-                if (choice == MessageBoxResult.Yes) await InstallUpdateAsync(result);
-            }
-            catch (Exception ex)
-            {
-                AppLog.Write("update.check.failed " + ex.Message);
-            }
-        }
-
-        private async Task InstallUpdateAsync(UpdateCheckResult update)
-        {
-            try
-            {
-                SetBusy(true, "正在更新工具", "正在下载并校验 v" + update.LatestVersion);
-                AppendLog("开始下载工具更新 v" + update.LatestVersion + "。", Restart);
-                var started = await UpdateInstaller.PrepareAndLaunchAsync(update, message =>
-                {
-                    SetStatus("正在更新工具", message, Restart);
-                    AppendLog(message, TextSecondary);
-                });
-                if (started)
-                {
-                    AppLog.Write("update.apply.start version=" + update.LatestVersion);
-                    Application.Current.Shutdown();
-                }
-            }
-            catch (Exception ex)
-            {
-                SetBusy(false, "自动更新失败", ex.Message);
-                AppendLog("自动更新失败：" + ex.Message, Danger);
-                AppLog.Write("update.prepare.failed " + ex);
-                var choice = MessageBox.Show(
-                    this,
-                    "自动更新失败：" + ex.Message + "\n\n是否打开下载页面手动更新？",
-                    "更新未完成",
-                    MessageBoxButton.YesNo,
-                    MessageBoxImage.Warning);
-                if (choice == MessageBoxResult.Yes) AppInfo.OpenUrl(update.ReleaseUrl);
             }
         }
 
