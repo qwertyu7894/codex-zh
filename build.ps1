@@ -93,7 +93,7 @@ namespace CodexZhLauncher
     internal static partial class AppInfo
     {
         public const string BrandName = "$Brand";
-        public const string BrandTagline = "$Brand —— Codex Desktop 中文化（本地化副本 + asar 补丁）";
+        public const string BrandTagline = "$Brand —— Codex Desktop 中文化（运行时注入，跟随最新版）";
     }
 }
 "@
