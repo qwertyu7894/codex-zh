@@ -44,11 +44,6 @@ param(
     [string]$Language = 'zh-CN',
     [string]$Target,
     [string]$Root,
-    # 只（重新）创建快捷方式然后退出。运行时注入路线每次启动成功后都会调它，
-    # 把「ChatGPT 中文版」从"指向本地化副本"改成"指向工具自身"。
-    [switch]$Shortcuts,
-    # 配合 -Shortcuts：快捷方式要指向的可执行文件（通常是本工具自己）。
-    [string]$LauncherPath,
     [switch]$Quiet          # GUI 调用时用：抑制"用法"帮助块，只留状态与结果
 )
 
@@ -242,72 +237,11 @@ function Set-LocaleOverride {
     return @{ Changed = $true; Reason = 'appended-desktop-section' }
 }
 
-# ---------------------------------------------------------------- 快捷方式
-
-function New-AppShortcuts {
-    <#
-      给本地化副本建立桌面 + 开始菜单快捷方式。
-      开始菜单那条很关键：客户端习惯"按 Win 键搜图标打开"，
-      有了它才能搜到中文版，而不是只能搜到那个永远英文的商店原版。
-
-      快捷方式带上 --lang，是为了兼容系统语言非中文的机器
-      （菜单语言跟随 app.getLocale()，中文系统下不加也对，加了更稳）。
-    #>
-    param(
-        [Parameter(Mandatory)][string]$ExePath,
-        [Parameter(Mandatory)][string]$WorkDir,
-        [Parameter(Mandatory)][string]$Locale,
-        [string]$Name = 'ChatGPT 中文版',
-        # 显式指定快捷方式的参数与描述。留空则用老行为（--lang=<语言>，指向本地化副本）。
-        # 运行时注入路线会传 '--launch-zh' —— 让快捷方式指向工具自身。
-        [string]$Arguments = '',
-        [string]$Description = '',
-        [switch]$Apply
-    )
-
-    $targets = @()
-    $desktop = [Environment]::GetFolderPath('Desktop')
-    $programs = [Environment]::GetFolderPath('Programs')
-    if ($desktop) { $targets += (Join-Path $desktop ($Name + '.lnk')) }
-    if ($programs) { $targets += (Join-Path $programs ($Name + '.lnk')) }
-
-    if (-not $Apply) { return @{ Status = 'dry'; Targets = $targets } }
-
-    # 图标：优先用 App 自带的高质量 .ico。
-    # 直接用 exe 的内嵌图标资源会发虚（尺寸不全），和商店原版的图块对不上，
-    # 用户一眼就看出"这两个图标不一样"。light 版是黑色结，与商店原版一致。
-    $iconFile = $ExePath
-    foreach ($cand in @(
-                (Join-Path $WorkDir 'resources\chatgpt-app-light.ico'),
-                (Join-Path $WorkDir 'resources\icon-chatgpt.ico'))) {
-        if (Test-Path -LiteralPath $cand) { $iconFile = $cand; break }
-    }
-
-    $shell = New-Object -ComObject WScript.Shell
-    $made = @()
-    foreach ($t in $targets) {
-        try {
-            $dir = Split-Path $t -Parent
-            if (-not (Test-Path -LiteralPath $dir)) { New-Item -ItemType Directory -Path $dir -Force | Out-Null }
-            $sc = $shell.CreateShortcut($t)
-            $sc.TargetPath = $ExePath
-            $sc.WorkingDirectory = $WorkDir
-            $sc.IconLocation = $iconFile + ',0'
-            if ([string]::IsNullOrWhiteSpace($Arguments)) { $sc.Arguments = '--lang=' + $Locale }
-            else { $sc.Arguments = $Arguments }
-            if ([string]::IsNullOrWhiteSpace($Description)) {
-                $sc.Description = 'ChatGPT 中文版（本地化副本，与商店原版共存）'
-            } else { $sc.Description = $Description }
-            $sc.Save()
-            $made += $t
-        } catch {
-            Write-Warn ("快捷方式创建失败：{0} —— {1}" -f $t, $_.Exception.Message)
-        }
-    }
-    return @{ Status = 'ok'; Made = $made; Icon = $iconFile }
-}
-
 # ---------------------------------------------------------------- 打补丁
+# 注：本脚本此前还会创建「ChatGPT 中文版」桌面/开始菜单快捷方式。
+# 从 v1.2.2 起**不再创建任何快捷方式** —— 用户直接启动本工具即可。
+# 旧的快捷方式指向的是本地化副本，双击它会启动一份**没有经过注入**的 Codex
+# （界面仍是英文），留着只会让人以为"汉化没生效"，所以一并去掉了。
 
 function Invoke-PatchPass {
     param(
@@ -628,25 +562,9 @@ function Invoke-Install {
         Write-Log ("install mode=$mode target=$targetApp version=$($state.version)")
     }
 
-    # 5) 桌面 / 开始菜单快捷方式
-    #    没有这条，客户端只能从开始菜单搜到「商店原版」——而那个永远是英文，
-    #    用户会以为汉化没生效。
-    Write-Info ''
-    Write-Info '--- 快捷方式 ---'
-    $exeForShortcut = Join-Path $targetApp 'ChatGPT.exe'
-    if (-not (Test-Path -LiteralPath $exeForShortcut)) { $exeForShortcut = Join-Path $targetApp 'Codex.exe' }
-    if (Test-Path -LiteralPath $exeForShortcut) {
-        $sc = New-AppShortcuts -ExePath $exeForShortcut -WorkDir $targetApp -Locale $Language -Apply:$Apply
-        if ($sc.Status -eq 'ok') {
-            foreach ($m in $sc.Made) { Write-Ok ("已创建快捷方式：{0}" -f $m) }
-            Write-Info ("使用图标：{0}" -f $sc.Icon)
-        } elseif ($sc.Status -eq 'dry') {
-            foreach ($m in $sc.Targets) { Write-Info ("将创建快捷方式：{0}" -f $m) }
-        }
-    } else {
-        Write-Warn '没找到可执行文件，跳过快捷方式创建。'
-    }
-
+    # 注：这里此前会创建「ChatGPT 中文版」快捷方式。v1.2.2 起**不再创建** ——
+    # 用户直接启动本工具即可；而指向本地化副本的快捷方式会启动一份没有注入的
+    # Codex（英文），留着反而误导。
     return 0
 }
 
@@ -707,28 +625,8 @@ if (-not $targetApp) {
     }
 }
 
-# -Shortcuts：只（重新）创建快捷方式就退出。运行时注入路线每次启动成功后调它，
-# 把「ChatGPT 中文版」从"指向本地化副本"改成"指向工具自身"。
-if ($Shortcuts) {
-    $exeForShortcut = if (-not [string]::IsNullOrWhiteSpace($LauncherPath)) { $LauncherPath }
-                      else { Join-Path (Join-Path $Root 'app') 'ChatGPT.exe' }
-    $workForShortcut = if (-not [string]::IsNullOrWhiteSpace($LauncherPath)) { Split-Path $LauncherPath -Parent }
-                       else { Join-Path $Root 'app' }
-    if (-not (Test-Path -LiteralPath $exeForShortcut)) {
-        Write-Err ("快捷方式目标不存在：{0}" -f $exeForShortcut)
-        exit 1
-    }
-    $sc = New-AppShortcuts -ExePath $exeForShortcut -WorkDir $workForShortcut -Locale $Language -Apply `
-                           -Arguments '--launch-zh' `
-                           -Description 'ChatGPT 中文版（运行时注入，跟随最新版 Codex）'
-    if ($sc.Status -eq 'ok') {
-        foreach ($m in $sc.Made) { Write-Ok ("已创建快捷方式：{0}" -f $m) }
-        Write-Info ("目标：{0} --launch-zh" -f $exeForShortcut)
-        exit 0
-    }
-    Write-Err '快捷方式创建失败。'
-    exit 1
-}
+# 注：此前这里有个 -Shortcuts 模式（只创建快捷方式然后退出）。
+# v1.2.2 起不再创建任何快捷方式，该模式随之删除。
 
 if ($Status -or (-not $Install -and -not $Launch)) {
     Show-Status -Found $found -TargetApp $targetApp
