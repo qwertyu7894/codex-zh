@@ -65,47 +65,8 @@ namespace CodexZhLauncher
             }
         }
 
-        /// <summary>
-        /// 把「ChatGPT 中文版」快捷方式重指到**本工具自己**（带 <c>--launch-zh</c>）。
-        ///
-        /// **为什么必须重指**：旧快捷方式的 TargetPath 是本地化副本的 exe。改成运行时注入后，
-        /// 双击它会直接启动**没有经过注入**的副本 —— 用户看到的还是英文，
-        /// 然后会以为"注入根本没用"。指向工具之后，双击 = 每次走一遍注入
-        /// （对用户仍然只是一次双击，习惯不变）。
-        ///
-        /// 实现上刻意**复用 PowerShell 脚本**里的 New-AppShortcuts，而不是在 C# 里走
-        /// WScript.Shell 晚期绑定 —— 后者拿到的 CreateShortcut 返回值是 <c>__ComObject</c>，
-        /// 对它反射设 TargetPath 会失败（它只暴露 <c>Object</c> 的成员）。
-        /// 实测就是那样静默失败的：快捷方式根本没被创建出来。
-        /// </summary>
-        public static async Task<bool> RefreshShortcutsAsync(Action<string> onProgress)
-        {
-            try
-            {
-                var launcherPath = Assembly.GetExecutingAssembly().Location;
-                if (String.IsNullOrWhiteSpace(launcherPath) || !File.Exists(launcherPath)) return false;
-
-                var scriptDirectory = EnsureScripts();
-                var lines = await RunScriptAsync(
-                    scriptDirectory,
-                    "-Shortcuts -Quiet -LauncherPath \"" + launcherPath + "\"",
-                    null);
-
-                var ok = ContainsAny(lines, "[成功]");
-                AppLog.Write("shortcut.refresh ok=" + ok + " target=" + launcherPath);
-                if (ok && onProgress != null)
-                {
-                    try { onProgress("「ChatGPT 中文版」快捷方式已指向本工具 —— 以后双击它就是中文。"); }
-                    catch { }
-                }
-                return ok;
-            }
-            catch (Exception ex)
-            {
-                AppLog.Write("shortcut.refresh.failed " + ex.Message);
-                return false;
-            }
-        }
+        // 注：v1.2.2 起不再创建/重指任何快捷方式 —— 用户直接启动本工具即可。
+        // 此前这里有个 RefreshShortcutsAsync（调 PowerShell 的 -Shortcuts 模式），已删除。
 
         public static async Task<LaunchReport> LaunchAsync(
             CodexInstall install,

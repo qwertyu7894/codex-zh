@@ -623,16 +623,15 @@ namespace CodexZhLauncher
                 UpdatePresentation();
             }
 
-            // 启动成功之后的两件收尾（刻意放在 finally 之外：
+            // 启动成功之后的收尾（刻意放在 finally 之外：
             // C# 5 不允许在 finally 子句里 await，CS1984）：
-            //   ① 重新探测 —— 回退路线可能刚把副本重拷过，版本号变了
-            //   ② 快捷方式重指到工具自己（旧的是指向副本 exe 的，
-            //      双击它会启动**没有经过注入**的副本，用户看到的还是英文）
+            // 重新探测 —— 回退路线可能刚把副本重拷过，版本号变了。
+            //
+            // 刻意**不**创建/重指快捷方式：本版起用户直接启动本工具即可，
+            // 不再往桌面和开始菜单塞东西。
             if (lastLaunchReport != null && lastLaunchReport.Complete)
             {
                 await DetectInstallAsync();
-                await LocalizationRuntime.RefreshShortcutsAsync(
-                    delegate(string message) { AppendLog(message, TextSecondary); });
             }
 
             // 每会话只问一次。用户若选"否"，下次开工具还会问 —— 因为 2GB 一直占着。
