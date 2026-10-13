@@ -31,7 +31,7 @@ namespace CodexZhLauncher
             catch (Exception ex)
             {
                 injectError = ex;
-                AppLog.Write("inject.failed " + ex.Message);
+                AppLog.Write("inject.failed " + Describe(ex));
             }
 
             if (injected != null && injected.Complete)
@@ -80,6 +80,26 @@ namespace CodexZhLauncher
             patchReport.FallbackReason = reason;
             AppLog.Write("launch.mode=patch fallback=" + reason);
             return patchReport;
+        }
+
+        /// <summary>
+        /// 把异常记成"人看得懂 + 能拿去搜"的形式：类型 + HRESULT + 消息，内层也带上。
+        ///
+        /// 只记 <c>ex.Message</c> 会丢掉最关键的线索：客户机上那句"拒绝访问。"既可能是
+        /// 权限不足，也可能是 AppLocker / Smart App Control / 杀软拦的 —— 三者要看
+        /// HRESULT（0x80070005 是权限）和内层异常才分得清。Process.Start 常把真正
+        /// 的原因裹在 InnerException 里。
+        /// </summary>
+        private static string Describe(Exception ex)
+        {
+            if (ex == null) return "(无异常)";
+            var text = ex.GetType().Name + " 0x" + ex.HResult.ToString("X8") + " " + ex.Message;
+            if (ex.InnerException != null)
+            {
+                text += "  <-  " + ex.InnerException.GetType().Name +
+                    " 0x" + ex.InnerException.HResult.ToString("X8") + " " + ex.InnerException.Message;
+            }
+            return text;
         }
 
         private static void Report(Action<string> callback, string message)
