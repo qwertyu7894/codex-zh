@@ -242,6 +242,15 @@ namespace CodexZhLauncher
             if (IsLocalizedCopyInstall(install) && IsStoreCodexPath(fullPath))
                 return true;
 
+            // 反向的那一半：**本地化副本永远算"我们的"**，不管当前 install 是哪种形态。
+            //
+            // 为什么需要：运行时注入模式下 currentInstall 是"原始安装"，但用户可能还开着
+            // 旧快捷方式指向的副本（老快捷方式 TargetPath 就是副本 exe）。两者共用同一个
+            // Electron 单实例锁 —— 不把副本一起关掉，注入启动的实例会被它顶掉，
+            // 而界面又显示"没有 Codex 在运行"，于是变成静默失败。
+            if (IsWithinDirectory(fullPath, LocalizationRuntime.LocalizedAppDir))
+                return true;
+
             if (install.IsStorePackage)
                 return IsWithinDirectory(fullPath, install.InstallLocation);
 

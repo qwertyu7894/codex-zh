@@ -55,6 +55,7 @@ namespace CodexZhLauncher
         private int lastRunningCount = -1;
         private string shutdownFailureDetail;
         private bool updatePromptShown;
+        private bool copyCleanupAsked;
 
         [DllImport("dwmapi.dll")]
         private static extern int DwmSetWindowAttribute(
@@ -431,17 +432,20 @@ namespace CodexZhLauncher
             SetBusy(true, "正在检测 Codex", "读取本机安装状态");
             try
             {
-                currentInstall = await CodexDiscovery.DetectAsync();
+                // 用"原始安装"而不是副本：运行时注入必须作用在原始安装上，
+                // 副本只是磁盘补丁那一版留下的旧快照（它会把汉化钉死在旧版本）。
+                // 回退走磁盘补丁时，LaunchCoordinator 会自己去解析副本。
+                currentInstall = await CodexDiscovery.DetectSourceInstallAsync();
                 missingPollCount = 0;
                 if (currentInstall != null)
                 {
                     // "版本"取的是副本 resources\owl-app.ini 的 AppVersion，不是 Appx 包编号，
                     // 所以别写成"包版本"。
                     AppendLog("已检测到 " + currentInstall.DisplayName + "，版本 " + currentInstall.Version + "。", Accent);
-                    if (!String.IsNullOrWhiteSpace(currentInstall.StaleSourceVersion))
+                    if (LocalizationRuntime.HasLocalizedCopy)
                     {
-                        AppendLog("源安装已是 " + currentInstall.StaleSourceVersion + "，本地化副本仍是 "
-                            + currentInstall.Version + "。点「汉化并启动」会重新复制并打补丁。", Warning);
+                        AppendLog("检测到旧的本地化副本（约 2 GB，位于 %USERPROFILE%\\.codex\\codex-zh）。"
+                            + "运行时注入不再需要它，可在启动时选择删除。", Warning);
                     }
                 }
                 else
@@ -550,23 +554,20 @@ namespace CodexZhLauncher
             shutdownFailureDetail = null;
             lastLaunchReport = null;
             SetRestartButtonMode(false);
-            if (!String.IsNullOrWhiteSpace(currentInstall.StaleSourceVersion))
+            var source = currentInstall.Kind == "Microsoft Store"
+                ? "Microsoft Store · 包版本 " + currentInstall.Version
+                : currentInstall.DisplayName + " · " + currentInstall.Version;
+            if (LocalizationRuntime.HasLocalizedCopy)
             {
-                // 副本是"快照"：商店包升级后它不会跟着变 —— 汉化保住了，但 Codex 停在旧版。
-                // 不在这里点明，用户会一直跑旧版而毫无察觉。
-                SetStatus(
-                    "副本已过期",
-                    "源安装已是 " + currentInstall.StaleSourceVersion
-                        + "，本地化副本仍是 " + currentInstall.Version
-                        + " —— 点「汉化并启动」即可跟上",
-                    Warning);
+                // 副本对运行时注入已经没有用了 —— 它只是磁盘补丁那一版的旧快照，
+                // 留着占 2 GB 而且会逐版过期。但不自动删：那是用户磁盘上的东西，得他自己点头。
+                SetStatus("已就绪 · 有旧副本可清理",
+                    source + " · 将以运行时注入方式汉化；另有旧的本地化副本（约 2 GB），启动时会问是否删除",
+                    Success);
             }
             else
             {
-                var source = currentInstall.Kind == "Microsoft Store"
-                    ? "Microsoft Store · 包版本 " + currentInstall.Version
-                    : currentInstall.DisplayName + " · " + currentInstall.Version;
-                SetStatus("已就绪", source, Success);
+                SetStatus("已就绪", source + " · 将以运行时注入方式汉化", Success);
             }
             primaryLabel.Text = "汉化并启动";
             primaryButton.IsEnabled = true;
@@ -582,11 +583,24 @@ namespace CodexZhLauncher
             AppLog.Write("ui.launch.begin locale=zh-CN");
             try
             {
-                var report = await LocalizationRuntime.LaunchAsync(
+                // 路线决策全在 LaunchCoordinator：先试运行时注入，失败自动回退磁盘补丁。
+                var report = await LaunchCoordinator.LaunchAsync(
                     currentInstall,
                     "zh-CN",
                     delegate(string message) { AppendLog(message, TextSecondary); });
                 lastLaunchReport = report;
+                if (String.Equals(report.Mode, "patch", StringComparison.Ordinal))
+                {
+                    AppendLog("本次走的是**磁盘补丁**路线" +
+                        (String.IsNullOrWhiteSpace(report.FallbackReason)
+                            ? "。"
+                            : "（运行时注入未成功：" + report.FallbackReason + "）"), Warning);
+                }
+                else
+                {
+                    AppendLog("本次走的是**运行时注入**路线 —— 汉化作用在当前版本上，" +
+                        "Codex 升级后不需要重打。" + (String.IsNullOrWhiteSpace(report.InjectionDetail) ? "" : "（" + report.InjectionDetail + "）"), TextSecondary);
+                }
                 AppendLog("界面语言：" + (report.LocaleApplied ? "已确认中文" : "未确认"), report.LocaleApplied ? Accent : Warning);
                 AppendLog("原生菜单：" + (report.MenuApplied ? "已全部覆盖" : "仍有未翻译项"), report.MenuApplied ? Accent : Warning);
                 if (!String.IsNullOrWhiteSpace(report.LocaleDetail))
@@ -607,17 +621,68 @@ namespace CodexZhLauncher
                 UpdatePresentation();
             }
 
-            // 若刚才是"副本已过期"状态下重打的，副本已被刷新（脚本会删旧副本重拷），
-            // 必须**重新探测**：否则 currentInstall 里缓存的 Version / StaleSourceVersion
-            // 仍是旧值 —— 用户按提示修好了，界面却还挂着「副本已过期」，连版本号都是错的。
-            //
-            // 刻意放在 finally 之外：本项目 csc 未指定 /langversion，按 C# 5 编译，
-            // 而 C# 5 不允许在 finally 子句里 await（CS1984）。
-            if (lastLaunchReport != null && lastLaunchReport.Complete
-                && !String.IsNullOrWhiteSpace(currentInstall.StaleSourceVersion))
+            // 启动成功之后的两件收尾（刻意放在 finally 之外：
+            // C# 5 不允许在 finally 子句里 await，CS1984）：
+            //   ① 重新探测 —— 回退路线可能刚把副本重拷过，版本号变了
+            //   ② 快捷方式重指到工具自己（旧的是指向副本 exe 的，
+            //      双击它会启动**没有经过注入**的副本，用户看到的还是英文）
+            if (lastLaunchReport != null && lastLaunchReport.Complete)
             {
                 await DetectInstallAsync();
+                await LocalizationRuntime.RefreshShortcutsAsync();
             }
+
+            // 每会话只问一次。用户若选"否"，下次开工具还会问 —— 因为 2GB 一直占着。
+            if (!copyCleanupAsked)
+            {
+                copyCleanupAsked = true;
+                OfferCopyCleanup();
+            }
+        }
+
+        /// <summary>
+        /// 询问是否删除旧的本地化副本。
+        ///
+        /// **边界极重要**：只删 <c>%USERPROFILE%\.codex\codex-zh\</c> 这一个目录，
+        /// **绝不碰** <c>%USERPROFILE%\.codex\config.toml</c> —— 那是 localeOverride 所在，
+        /// 删了原生菜单就回英文。两者是同级不同项，config.toml 在上一层，不在被删目录里。
+        /// </summary>
+        private void OfferCopyCleanup()
+        {
+            if (!LocalizationRuntime.HasLocalizedCopy) return;
+
+            var root = LocalizationRuntime.LocalizedRoot;
+            var answer = MessageBox.Show(
+                this,
+                "检测到旧的本地化副本：\n\n" + root +
+                "\n\n它是磁盘补丁方案复制出来的整份 Codex（约 2 GB）。\n" +
+                "改用运行时注入之后，这份副本已经用不上了。\n\n" +
+                "是否删除以释放磁盘空间？\n\n" +
+                "（只删上面这一个目录；你的 Codex 配置、登录状态和聊天记录都不在里面）",
+                "清理旧的本地化副本",
+                MessageBoxButton.YesNo,
+                MessageBoxImage.Question,
+                MessageBoxResult.No);
+
+            if (answer != MessageBoxResult.Yes)
+            {
+                AppendLog("已保留本地化副本（约 2 GB）。", TextSecondary);
+                return;
+            }
+
+            AppendLog("正在删除本地化副本（约 2 GB，可能需要一会儿）…", TextSecondary);
+            try
+            {
+                Directory.Delete(root, true);
+                AppendLog("本地化副本已删除。" + root, Accent);
+                AppLog.Write("copy.cleanup.done " + root);
+            }
+            catch (Exception ex)
+            {
+                AppendLog("删除本地化副本失败：" + ex.Message, Warning);
+                AppLog.Write("copy.cleanup.failed " + ex.Message);
+            }
+            UpdatePresentation();
         }
 
         private async Task ConfirmCloseAndRestartAsync()

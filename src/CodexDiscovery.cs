@@ -45,6 +45,29 @@ namespace CodexZhLauncher
             return DetectCommonPortableInstall();
         }
 
+        /// <summary>
+        /// 解析"**原始安装**"（跳过本地化副本）。运行时注入路线要的是这个 ——
+        /// 它必须作用在原始安装上；副本只是磁盘补丁那一版留下的旧快照。
+        ///
+        /// 与 <see cref="DetectAsync"/> 的差别**只有一处**：不尝试 DetectLocalizedCopy()，
+        /// 因此也不会跑 MarkStaleCopyAsync（"副本过期"提醒是为磁盘补丁世界设计的）。
+        /// 其余优先级（手动指定 → 商店包 → 常见便携路径）完全一致。
+        ///
+        /// 刻意**不改** DetectAsync：它同时服务 UI 的"当前安装"显示、
+        /// CodexProcessManager 的进程归属判断、以及磁盘补丁路线的前置解析 ——
+        /// 把"副本优先"从它里面挪走，会一次改坏三处。
+        /// </summary>
+        public static async Task<CodexInstall> DetectSourceInstallAsync()
+        {
+            var custom = LoadPortableInstall();
+            if (custom != null) return custom;
+
+            var store = await DetectStorePackageAsync();
+            if (store != null) return store;
+
+            return DetectCommonPortableInstall();
+        }
+
         private static CodexInstall DetectLocalizedCopy()
         {
             try

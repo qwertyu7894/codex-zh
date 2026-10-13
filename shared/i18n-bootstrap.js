@@ -1,6 +1,16 @@
 (function () {
   var configId = '72216192';
   var locale = 'zh-CN';
+
+  // 注入前，C# 侧会把下面这个字面量替换成 "SYSTEM" 或 null：
+  //   "SYSTEM" = 让 App 跟随**系统语言**（中文 Windows 上界面与原生菜单都会中文化，已实测）
+  //   null     = **不碰** locale_source，交回 App 默认，由 localeOverride 兜底
+  //              （给非中文 Windows 用 —— 那时 'SYSTEM' 会解析成 en-US、界面回英文）
+  // 未被替换时（例如 macOS 端直接内嵌原始文件）回退到 'SYSTEM'：
+  // 真值只可能是 "SYSTEM" 或 null，绝不会以 '_' 开头。
+  var localeSource = '__LOCALE_SOURCE__';
+  if (localeSource && localeSource.charAt(0) === '_') { localeSource = 'SYSTEM'; }
+
   var state = globalThis.__codexZhI18nState || {
     configId: configId,
     patchedClients: 0,
@@ -22,7 +32,7 @@
           configurable: true,
           value: function (key, fallback) {
             if (key === 'enable_i18n') return true;
-            if (key === 'locale_source') return 'SYSTEM';
+            if (localeSource !== null && key === 'locale_source') return localeSource;
             return originalGet.call(this, key, fallback);
           }
         });
@@ -31,7 +41,7 @@
     try {
       if (config.value && typeof config.value === 'object') {
         config.value.enable_i18n = true;
-        config.value.locale_source = 'SYSTEM';
+        if (localeSource !== null) { config.value.locale_source = localeSource; }
       }
     } catch (_) {}
     state.patchedConfigs += 1;
@@ -116,7 +126,7 @@
     status: state.patchedClients > 0 && state.patchedConfigs > 0 ? 'ok' : 'pending',
     configId: configId,
     enable_i18n: true,
-    locale_source: 'SYSTEM',
+    locale_source: localeSource,
     patchedClients: state.patchedClients,
     patchedConfigs: state.patchedConfigs,
     lastPatchAt: state.lastPatchAt

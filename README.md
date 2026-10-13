@@ -1,7 +1,11 @@
 # Codex 中文化工具
 
-基于 [shibaweidu/codex-desktop-zh](https://github.com/shibaweidu/codex-desktop-zh) 的改版，
-用**磁盘补丁**方案取代上游那套运行时注入（它在**新版** Codex 上已不可用）。
+基于 [shibaweidu/codex-desktop-zh](https://github.com/shibaweidu/codex-desktop-zh) 的改版。
+
+汉化默认走**运行时注入**：启动 Codex 时连上它的渲染进程，把中文界面注入进去 ——
+作用在**正在跑的那个版本**上，所以 **Codex 升级后不需要重打**。
+注入失败会**自动回退**到**磁盘补丁**（复制一份 Codex、改副本的 `app.asar`）。
+
 当前版本见 [`CHANGELOG.md`](CHANGELOG.md)，
 版本号唯一来源是 `src/AppInfo.cs` 的 `AppInfo.Version`。
 
@@ -45,36 +49,50 @@
 
 ## 这个分支改了什么
 
-上游 v0.7.7 的汉化方式，是用 `--inspect` 连上 Electron 主进程注入 JS 改写原生菜单。
+上游 v0.7.7 用 `--inspect` 连 Electron **主进程**注入 JS 改写原生菜单。
+**新版** Codex（`26.1007.*` 起）关掉了 Electron fuse `EnableNodeCliInspectArguments`，
+`--inspect` 被静默忽略 —— 那条路在新版上不可用。
 
-**新版** Codex 桌面端（`26.1007.*` 起）关掉了 Electron fuse
-`EnableNodeCliInspectArguments`，`--inspect` 被静默忽略，这条路在**新版**上不可用。
+> 它不是"永久失效"：fuse 是**编译期**烧进二进制的属性，绑的是 **Codex 的版本**而不是时间。
+> 仍跑旧版 Codex 的机器上照常工作。
 
-> **但它不是"永久失效"。** fuse 是**编译期烧进二进制**的属性，绑的是 **Codex 的版本**
-> 而不是时间 —— 仍跑旧版 Codex 的机器上这条路**照常工作**。所以真实表现是
-> "**部分机器可用、部分机器不可用**"，取决于客户端有没有让 Codex 自动升级
-> （商店版默认会）。这直接决定了下面两条模式各自的更新行为，见「更新后汉化还在吗」。
+本分支改用两条路，**互为保险**：
 
-同时 MSIX 清单只声明 `en-US`，把 `app.getLocale()` 顶死成英文。
+### 默认：运行时注入（`src/InjectionRuntime.cs`）
 
-本分支改为**磁盘补丁**方案，完全不依赖运行时注入：
+启动 Codex 时带 `--remote-debugging-port=<随机回环端口>`，连上**渲染进程**注入
+`shared/i18n-bootstrap.js`：
 
 | 层 | 做法 |
 | --- | --- |
-| **界面** | 把 `app.asar` 内 `enable_i18n` 的**默认值**由 `false` 改为 `true`。改默认值而非运行时状态，**一次生效、永久有效** |
-| **菜单** | 把 App **复制出 MSIX 包**运行。脱离包后 PRI 资源语言限制消失，`app.getLocale()` 跟随系统语言，原生菜单自动加载 `native-menu-locales/zh-CN.json` |
-| **完整性** | 改完 asar **必须**同步更新头部里该文件的 per-file 哈希，并把重算后的「头部哈希」写回 `ChatGPT.exe` 里嵌入的记录 |
+| **界面** | 劫持 Statsig 的 `getDynamicConfig` / `getLayer`，把 configId `72216192` 强制成 `enable_i18n=true` |
+| **菜单** | 同时强制 `locale_source='SYSTEM'` —— App 自己按系统语言重建原生菜单 |
 
-第三步不能漏。`EnableEmbeddedAsarIntegrityValidation=1` 是真的在执行，
-只改 asar 会导致 App 启动瞬间崩溃：
+成功判据是页内 `__codexZhI18nState.patchedConfigs >= 1`（实测 16~40 秒生效，
+因为要等 App 自己去重取一次动态配置）。
+
+> **`--remote-debugging-port` 是 Chromium 的开关，不受 Electron fuse 管辖** ——
+> 实测在新版上仍然可用。而 `--inspect` 那条路已经死了，所以**不要**把它加回来
+> （`--self-test` 里有断言拦着）。
+
+### 回退：磁盘补丁（`localize/`，PowerShell）
+
+注入不成功时自动回退（回退前必须先关掉刚启动的实例 —— 与副本共用单实例锁）。
+改 `app.asar` 内 `enable_i18n` 的**默认值** `false` → `true`，
+改完**必须**同步两处哈希，否则 App 启动瞬间崩溃：
 
 ```
 FATAL:third_party\electron\shell\common\asar\asar_util.cc:143
 Integrity check failed for asar archive
 ```
 
-三步全部是**等长原地替换**（1 字节 / 64 位十六进制），因此不需要解包重打包，
-整个补丁过程是毫秒级的。
+| 步骤 | 内容 |
+| --- | --- |
+| 1 | 改写目标 JS 的文件字节（**必须等长**，1 字节） |
+| 2 | 同步更新 asar 头部里该文件的 per-file SHA-256 |
+| 3 | 重算「头部 JSON 区」的 SHA-256，写回 `ChatGPT.exe` 里嵌入的记录 |
+
+商店版无法原地改（`WindowsApps` 受 ACL 保护），所以先复制一份再改副本。
 
 ---
 
@@ -98,41 +116,50 @@ Integrity check failed for asar archive
 
 双击 `CodexZh-Windows-x64.exe` → 点「汉化并启动」。
 
-首次约 40 秒（会把 App 复制到 `%USERPROFILE%\.codex\codex-zh\app`，约 2 GB）。
+默认走运行时注入，约 **20~40 秒**（期间界面先英文、后中文）；
+若注入失败会自动回退磁盘补丁（会多花一两分钟复制副本）。日志里会写明走的哪条路。
 
-**装完之后不需要再开这个工具** —— 客户端可以直接双击
-`%USERPROFILE%\.codex\codex-zh\app\ChatGPT.exe`，中文界面与中文菜单都在，
-因为补丁是写在磁盘上的，不是运行时注入。
+启动成功后工具会把「ChatGPT 中文版」快捷方式**指向工具自身**（带 `--launch-zh`）——
+双击它 = 每次走一遍注入，对用户仍然只是一次双击。
 
-工具只在三种情况才需要再打开：首次安装、**Codex 升级之后**重打一次、当启动器用。
+> 为什么必须重指：注入时代之前那个快捷方式直接指向副本 exe，
+> 双击它会启动**没有经过注入**的副本 —— 用户看到的还是英文，然后以为注入没用。
+
+机器上若还留着磁盘补丁时代的本地化副本（`%USERPROFILE%\.codex\codex-zh\app`，约 2 GB），
+启动成功后会弹框询问是否删除。**只删 `codex-zh\` 这一个目录，
+绝不碰 `.codex\config.toml`** —— 那是 `localeOverride` 所在，删了原生菜单就回英文。
+
+### 调试用的命令行开关
+
+```
+--launch-zh                 默认路线（注入 → 失败回退补丁）
+--launch-zh-inject-only     只走注入，不回落
+--launch-zh-patch-only      只走磁盘补丁
+--self-test                 构建期自检
+--diagnostics               打印探测到的安装信息
+```
 
 ---
 
 ## 更新后汉化还在吗
 
-取决于用的是哪种模式 —— 这正是上面那个"fuse 绑版本"的直接后果。
+**默认路线（运行时注入）：永远在，而且永远是最新版。**
 
-| | **界面汉化**（改 asar） | **菜单汉化**（localeOverride） |
+汉化是在 Codex 跑起来之后注入的，所以它作用在**当前正在跑的那个版本**上 ——
+Codex 什么时候更新，下次打开就是最新版 + 中文。**不需要任何"重打"。**
+
+**回退路线（磁盘补丁）：汉化打在"复制那一刻的版本"上**，所以：
+
+| | 界面汉化（改 asar） | 菜单汉化 |
 | --- | --- | --- |
-| **商店版**（`store-copy`） | ✅ **还在** —— 副本是独立目录，商店更新碰不到它 | ✅ 不受影响 |
-| **官网版 / 便携版**（`direct`） | ❌ **失效** —— 更新覆盖掉 `app.asar` | ✅ 不受影响 |
+| **商店版**（`store-copy`） | 还在（副本是独立目录，商店更新碰不到它），**但停在旧版本** | 不受影响 |
+| **官网版 / 便携版**（`direct`） | 更新会覆盖 `app.asar` → **失效** | 不受影响 |
 
-**商店版为什么"还在"**：我们把 App 复制到 `%USERPROFILE%\.codex\codex-zh\app`
-之后再打补丁，而 Microsoft Store 的更新只替换 `C:\Program Files\WindowsApps\` 里的原件，
-**碰不到副本**。代价是副本会一直停在**旧版本**，而且它脱离 MSIX 后自带的更新器会失效
-（`missing current windows package family`），**永远不会自己升级**。
+重跑一次工具即可跟上（`-Install` 会比对 `state.json` 记录的版本与当前源安装版本，
+不一致就重做副本 + 重打补丁）。
 
-> ⚠️ 所以商店版有个不易察觉的坑：**汉化没丢，但你跑的是旧版 Codex，且不会有人告诉你。**
-> 想跟上新版就重跑一次工具 —— `-Install` 会比对 `state.json` 记录的版本与当前商店版版本，
-> 不一致就自动重复制 + 重打补丁，并打印「检测到 Codex 已升级：A -> B」。
-
-**官网版 / 便携版为什么失效**：这类目录可写，走的是**原地补丁** —— 直接改你自己的
-`app.asar`。Codex 一更新（它自己的更新器，或你手动解压新版覆盖），`app.asar` 被盖掉，
-补丁就没了，界面回到英文。**不会崩**（exe 与 asar 会被一起换成自洽的一对）。
-重跑一次工具即可恢复。改动前留的 `app.asar.bak` 是**上一次安装时**的原件，不会随更新刷新。
-
-**菜单那一层两种模式都不受影响** —— `localeOverride` 写在 `~/.codex/config.toml`，
-是用户配置目录，Codex 升级不动它。
+> 这正是引入运行时注入的原因：磁盘补丁那条路会在 Codex 升级后
+> **让用户停在旧版而毫无察觉** —— 界面上没有新版本的内容。
 
 ---
 
@@ -143,7 +170,7 @@ Integrity check failed for asar archive
 | `localize/` | 汉化逻辑（PowerShell，唯一事实来源） |
 | `src/` | Windows 桌面端（C# / WPF，无 XAML，UI 全部代码构建） |
 | `macos/` | macOS 端（Swift）—— **本分支未适配，仍是上游原样** |
-| `shared/` | 上游遗留的注入脚本（本分支不再使用，保留仅为不破坏上游构建） |
+| `shared/` | 注入载荷（`i18n-bootstrap.js`、`locale-script.js` 等）—— **运行时注入路线正在使用** |
 
 ---
 

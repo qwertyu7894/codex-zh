@@ -8,8 +8,8 @@ using System.Windows;
 [assembly: System.Reflection.AssemblyCompany("Codex Localization Enhancer Community")]
 [assembly: System.Reflection.AssemblyProduct(CodexZhLauncher.AppInfo.BrandName)]
 [assembly: System.Reflection.AssemblyCopyright("Copyright 2026")]
-[assembly: System.Reflection.AssemblyVersion("1.1.5.0")]
-[assembly: System.Reflection.AssemblyFileVersion("1.1.5.0")]
+[assembly: System.Reflection.AssemblyVersion("1.2.0.0")]
+[assembly: System.Reflection.AssemblyFileVersion("1.2.0.0")]
 
 namespace CodexZhLauncher
 {
@@ -108,6 +108,7 @@ namespace CodexZhLauncher
             if (command == "--self-test")
             {
                 Output(LocalizationScripts.SelfTest());
+                Output(InjectionRuntime.SelfTest());
                 Output(UpdateChecker.SelfTest());
                 Output(UpdateInstaller.SelfTest());
                 return;
@@ -120,19 +121,63 @@ namespace CodexZhLauncher
                 return;
             }
 
-            if (command == "--launch-zh" || command == "--launch-en")
+            if (command == "--launch-zh" || command == "--launch-en" ||
+                command == "--launch-zh-inject-only" || command == "--launch-zh-patch-only")
             {
-                var locale = command == "--launch-zh" ? "zh-CN" : "en-US";
-                var report = LocalizationRuntime.LaunchAsync(install, locale).GetAwaiter().GetResult();
+                var locale = command == "--launch-en" ? "en-US" : "zh-CN";
+                Action<string> progress = delegate(string message) { Output(message); };
+                LaunchReport report;
+
+                if (command == "--launch-zh-patch-only")
+                {
+                    // 强制磁盘补丁（跳过注入）—— 用来单独验补丁那条路
+                    report = LocalizationRuntime.LaunchAsync(install, locale, progress).GetAwaiter().GetResult();
+                    report.Mode = "patch";
+                }
+                else if (command == "--launch-zh-inject-only")
+                {
+                    // 强制注入（不回落）—— 用来单独验注入那条路
+                    var injectSource = SourceInstallOrFallback(install);
+                    report = InjectionRuntime.LaunchAsync(injectSource, locale, progress).GetAwaiter().GetResult();
+                }
+                else
+                {
+                    // 默认：注入优先，失败自动回退磁盘补丁
+                    var source = SourceInstallOrFallback(install);
+                    report = LaunchCoordinator.LaunchAsync(source, locale, progress).GetAwaiter().GetResult();
+                }
+
                 Output(report.Message);
-                Output(String.Format("pid={0}; renderer_port={1}; inspector_port={2}",
-                    report.ProcessId, report.RendererPort, report.InspectorPort));
+                Output(String.Format("mode={0}; pid={1}; renderer_port={2}; inspector_port={3}",
+                    report.Mode ?? "-", report.ProcessId, report.RendererPort, report.InspectorPort));
                 Output(String.Format("locale={0}; menu={1}", report.LocaleApplied, report.MenuApplied));
+                if (!String.IsNullOrWhiteSpace(report.InjectionDetail)) Output("injection=" + report.InjectionDetail);
+                if (!String.IsNullOrWhiteSpace(report.FallbackReason)) Output("fallback=" + report.FallbackReason);
                 Environment.ExitCode = report.Complete ? 0 : 2;
                 return;
             }
 
-            throw new ArgumentException("未知参数。可用参数：--diagnostics、--self-test、--launch-zh、--launch-en");
+            throw new ArgumentException(
+                "未知参数。可用参数：--diagnostics、--self-test、--launch-zh、--launch-en、" +
+                "--launch-zh-inject-only（只验注入）、--launch-zh-patch-only（只验磁盘补丁）");
+        }
+
+        /// <summary>
+        /// 注入路线要的是"**原始安装**"（跳过本地化副本）—— 副本只是磁盘补丁那一版留下的旧快照。
+        /// 解析不到就退回传进来的那个，至少不会因为返回 null 而直接抛异常。
+        /// </summary>
+        private static CodexInstall SourceInstallOrFallback(CodexInstall fallback)
+        {
+            try
+            {
+                var source = CodexDiscovery.DetectSourceInstallAsync().GetAwaiter().GetResult();
+                return source ?? fallback;
+            }
+            catch (Exception ex)
+            {
+                AppLog.Write("source.detect.failed " + ex.Message);
+                return fallback;
+            }
         }
 
         private static void PrintDiagnostics(CodexInstall install)
