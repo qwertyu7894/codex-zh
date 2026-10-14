@@ -44,7 +44,18 @@ param(
     [string]$Language = 'zh-CN',
     [string]$Target,
     [string]$Root,
-    [switch]$Quiet          # GUI 调用时用：抑制"用法"帮助块，只留状态与结果
+    [switch]$Quiet,         # GUI 调用时用：抑制"用法"帮助块，只留状态与结果
+
+    # 只（重新）创建快捷方式然后退出。
+    # 只有"变体版"（build.ps1 -DesktopShortcut 出来的成品）会调它 —— 主版本
+    # 从 v1.2.2 起刻意不建任何快捷方式，原因见 New-AppShortcuts 的注释。
+    [switch]$Shortcuts,
+    # 快捷方式指向的可执行文件。**必须是本工具自身**（配合 --launch-zh）。
+    [string]$LauncherPath,
+    # 快捷方式显示名（桌面和开始菜单里那个名字）。
+    [string]$ShortcutName = 'GPT中文汉化',
+    # Codex 安装目录，仅用于取快捷方式的图标（取不到就退回工具自身图标）。
+    [string]$IconDir = ''
 )
 
 $ErrorActionPreference = 'Stop'
@@ -257,6 +268,78 @@ function Set-LocaleOverride {
         [System.IO.File]::WriteAllLines($Path, $out, (New-Object System.Text.UTF8Encoding($false)))
     }
     return @{ Changed = $true; Reason = 'appended-desktop-section' }
+}
+
+function New-AppShortcuts {
+    <#
+      在桌面 + 开始菜单放一个快捷方式。
+
+      ⚠️ 目标**必须是本工具自身**（配合 --launch-zh），**绝不能**指向本地化副本。
+      指向副本的图标双击后启动的是一份**没经过注入**的 Codex —— 界面仍是英文，
+      而用户会以为"汉化没生效"。1.1.x 就是这么做的，v1.2.2 因此把它整个删掉了；
+      这里恢复的是**修正过的**版本，所以 $Arguments 默认锁死成 --launch-zh。
+
+      开始菜单那条不是可有可无：客户端习惯"按 Win 键搜图标打开"，没有它就只能
+      搜到那个永远英文的商店原版。
+    #>
+    param(
+        [Parameter(Mandatory)][string]$ExePath,
+        [Parameter(Mandatory)][string]$WorkDir,
+        [string]$Name = 'GPT中文汉化',
+        [string]$Arguments = '--launch-zh',
+        [string]$Description = '打开中文版 Codex（运行时注入，跟随最新版）',
+        # Codex 安装目录。能从里面取到 App 自带的高质量 .ico 就用它，
+        # 让图标和客户端熟悉的那个 ChatGPT 图块一致。留空则退回工具自身图标。
+        [string]$IconDir = '',
+        [switch]$Apply
+    )
+
+    $targets = @()
+    $desktop  = [Environment]::GetFolderPath('Desktop')
+    $programs = [Environment]::GetFolderPath('Programs')
+    if ($desktop)  { $targets += (Join-Path $desktop  ($Name + '.lnk')) }
+    if ($programs) { $targets += (Join-Path $programs ($Name + '.lnk')) }
+
+    if (-not $Apply) { return @{ Status = 'dry'; Targets = $targets } }
+
+    if ($Arguments -notmatch '--launch-zh') {
+        Write-Warn ("快捷方式参数是「{0}」而不是 --launch-zh —— 指向副本的图标会打开一份英文 Codex。请确认这是你要的。" -f $Arguments)
+    }
+
+    # 图标优先用 App 自带的 .ico：直接用 exe 内嵌图标会发虚（尺寸不全），
+    # 和商店原版的图块对不上，用户一眼就看出"这两个图标不一样"。
+    $iconFile = $ExePath
+    $hosts = @()
+    if (-not [string]::IsNullOrWhiteSpace($IconDir)) { $hosts += $IconDir }
+    $hosts += $WorkDir
+    foreach ($h in $hosts) {
+        $found = $null
+        foreach ($rel in @('resources\chatgpt-app-light.ico', 'resources\icon-chatgpt.ico')) {
+            $cand = Join-Path $h $rel
+            if (Test-Path -LiteralPath $cand) { $found = $cand; break }
+        }
+        if ($found) { $iconFile = $found; break }
+    }
+
+    $shell = New-Object -ComObject WScript.Shell
+    $made = @()
+    foreach ($t in $targets) {
+        try {
+            $dir = Split-Path $t -Parent
+            if (-not (Test-Path -LiteralPath $dir)) { New-Item -ItemType Directory -Path $dir -Force | Out-Null }
+            $sc = $shell.CreateShortcut($t)
+            $sc.TargetPath       = $ExePath
+            $sc.WorkingDirectory = $WorkDir
+            $sc.IconLocation     = $iconFile + ',0'
+            $sc.Arguments        = $Arguments
+            $sc.Description      = $Description
+            $sc.Save()
+            $made += $t
+        } catch {
+            Write-Warn ("快捷方式创建失败：{0} —— {1}" -f $t, $_.Exception.Message)
+        }
+    }
+    return @{ Status = 'ok'; Made = $made; Icon = $iconFile }
 }
 
 # ---------------------------------------------------------------- 打补丁
@@ -785,6 +868,30 @@ function Invoke-Launch {
 Write-Host ''
 Write-Host 'Codex 本地化工具（codex-zh）' -ForegroundColor White -NoNewline
 Write-Host '  零依赖 / 不联网 / 不碰原版' -ForegroundColor DarkGray
+
+# -Shortcuts：只（重新）创建快捷方式就退出。
+#
+# 变体版每次汉化成功后调它，让桌面/开始菜单那个图标**始终指向本工具当前所在位置**
+# —— 用户可能把 exe 挪过地方，图标跟丢了就双击不动了。
+#
+# 注意这里**不需要**探测 Codex 安装（顺带省掉那次 Get-AppxPackage），
+# 因为目标就是工具自身；IconDir 只是"有就顺便用它取个好图标"。
+if ($Shortcuts) {
+    if ([string]::IsNullOrWhiteSpace($LauncherPath) -or -not (Test-Path -LiteralPath $LauncherPath)) {
+        Write-Err ("快捷方式目标不存在：{0}" -f $LauncherPath)
+        exit 1
+    }
+    $sc = New-AppShortcuts -ExePath (Get-Item -LiteralPath $LauncherPath).FullName `
+                           -WorkDir (Split-Path $LauncherPath -Parent) `
+                           -Name $ShortcutName -IconDir $IconDir -Apply
+    if ($sc.Status -eq 'ok') {
+        foreach ($m in $sc.Made) { Write-Ok ("已创建快捷方式：{0}" -f $m) }
+        Write-Info ("目标：{0} --launch-zh" -f $LauncherPath)
+        exit 0
+    }
+    Write-Err '快捷方式创建失败。'
+    exit 1
+}
 
 $found = Find-CodexInstall -Override $Target
 

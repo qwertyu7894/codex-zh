@@ -7,7 +7,21 @@ param(
     [string]$Brand = 'Codex 汉化增强工具',
 
     # 输出文件名
-    [string]$OutputName = 'CodexZh-Windows-x64.exe'
+    [string]$OutputName = 'CodexZh-Windows-x64.exe',
+
+    # 编译期开关：这个成品在汉化成功后，是否往桌面/开始菜单放一个快捷方式。
+    #
+    # 默认**关**。主版本从 v1.2.2 起刻意不建任何快捷方式：指向"本地化副本"的旧图标
+    # 双击后启动的是一份没经过注入的 Codex（界面仍英文），比任何提示都更容易让人
+    # 以为"汉化没生效"。只有明确要"跑一次→桌面出现图标→以后双击图标进中文版"
+    # 那种用法的客户，才专门构建一个开了这个开关的变体。
+    #
+    # 开了之后图标指向的是**本工具自身 + --launch-zh**，不是副本 —— 见 CodexZh.ps1
+    # 里 New-AppShortcuts 的调用处。
+    [switch]$DesktopShortcut,
+
+    # 快捷方式的显示名。留空则用 $Brand。
+    [string]$ShortcutName = ''
 )
 
 $ErrorActionPreference = 'Stop'
@@ -86,6 +100,8 @@ foreach ($resource in $localizeResources) {
 
 # 生成品牌常量。必须带 BOM —— csc 没有 BOM 时按 ANSI 解码，中文会乱。
 $brandFile = Join-Path $intermediateDir 'Brand.g.cs'
+if ([string]::IsNullOrWhiteSpace($ShortcutName)) { $ShortcutName = $Brand }
+$shortcutFlag = if ($DesktopShortcut) { 'true' } else { 'false' }
 $brandSource = @"
 // 本文件由 build.ps1 自动生成，请勿手工编辑。
 namespace CodexZhLauncher
@@ -94,6 +110,11 @@ namespace CodexZhLauncher
     {
         public const string BrandName = "$Brand";
         public const string BrandTagline = "$Brand —— Codex Desktop 中文化（运行时注入，跟随最新版）";
+
+        // 编译期决定：汉化成功后要不要放桌面/开始菜单快捷方式。
+        // 只有 build.ps1 -DesktopShortcut 构建出来的变体才是 true。
+        public const bool CreateDesktopShortcut = $shortcutFlag;
+        public const string ShortcutName = "$ShortcutName";
     }
 }
 "@

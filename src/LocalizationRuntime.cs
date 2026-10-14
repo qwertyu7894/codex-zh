@@ -141,6 +141,54 @@ namespace CodexZhLauncher
             return report;
         }
 
+        /// <summary>
+        /// 让桌面/开始菜单那个图标**始终指向本工具当前所在位置**。
+        ///
+        /// 只有 `build.ps1 -DesktopShortcut` 构建出来的**变体版**才会调它
+        /// （MainWindow 里按 <see cref="AppInfo.CreateDesktopShortcut"/> 判断）。
+        /// 主版本从 v1.2.2 起刻意不建任何快捷方式 —— 指向"本地化副本"的旧图标，
+        /// 双击后启动的是一份**没经过注入**的 Codex，界面仍是英文，比任何提示都
+        /// 更容易让人以为"汉化没生效"。
+        ///
+        /// 这里让图标带着 `--launch-zh` 跑**本工具自身**：由它按当前 Codex 版本去
+        /// 注入（失败自动回退磁盘补丁），所以点开永远是最新版的汉化。
+        /// </summary>
+        public static async Task<bool> RefreshShortcutsAsync(CodexInstall install, Action<string> onProgress)
+        {
+            try
+            {
+                var launcherPath = Assembly.GetExecutingAssembly().Location;
+                if (String.IsNullOrWhiteSpace(launcherPath) || !File.Exists(launcherPath)) return false;
+
+                var scriptDirectory = EnsureScripts();
+                var arguments =
+                    "-Shortcuts -Quiet" +
+                    " -LauncherPath " + ProcessRunner.PowerShellLiteral(launcherPath) +
+                    " -ShortcutName " + ProcessRunner.PowerShellLiteral(AppInfo.ShortcutName);
+                if (install != null && !String.IsNullOrWhiteSpace(install.InstallLocation))
+                {
+                    // 只是"有就顺便用它取个好图标"，取不到会退回工具自身图标。
+                    arguments += " -IconDir " + ProcessRunner.PowerShellLiteral(install.InstallLocation);
+                }
+
+                var lines = await RunScriptAsync(scriptDirectory, arguments, null);
+
+                var ok = ContainsAny(lines, "[成功]");
+                AppLog.Write("shortcut.refresh ok=" + ok + " target=" + launcherPath);
+                if (ok)
+                {
+                    Report(onProgress, "桌面和开始菜单已放好「" + AppInfo.ShortcutName +
+                        "」图标 —— 以后双击它就是中文版。");
+                }
+                return ok;
+            }
+            catch (Exception ex)
+            {
+                AppLog.Write("shortcut.refresh.failed " + ex.Message);
+                return false;
+            }
+        }
+
         // ---- 嵌入脚本释放 ----
 
         private static string EnsureScripts()
