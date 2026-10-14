@@ -78,6 +78,28 @@ function Write-Log {
     } catch {}
 }
 
+function Read-StateFile {
+    param([string]$Path)
+    try {
+        if (-not (Test-Path -LiteralPath $Path)) { return $null }
+        return (Get-Content -LiteralPath $Path -Raw -Encoding UTF8 | ConvertFrom-Json)
+    } catch { return $null }
+}
+
+function Get-RulesSignature {
+    <#
+      规则表的"指纹"。改了任何一条规则的挑串/替换串/预期命中数，签名就变 ——
+      那样就不能再信任上次的打补丁结果，必须重新全量扫描。
+      只用语义字段，不含 Desc，免得改个说明文字就白白重扫一遍。
+    #>
+    param($Rules)
+    $parts = @()
+    foreach ($r in $Rules) {
+        $parts += ('{0}:{1}>{2}:{3}' -f $r.Id, $r.From, $r.To, $r.Expect)
+    }
+    return ($parts -join '|')
+}
+
 # ---------------------------------------------------------------- 安装探测
 
 function Find-CodexInstall {
@@ -280,6 +302,7 @@ function Invoke-PatchPass {
             #    所以要求 To 与规则声明的 AlreadyPatchedContext 出现在**同一个文件**里
             #    —— 那才是我们改过的那个动态配置默认值块。
             $alreadyPatched = $false
+            $alreadyEntry   = $null
             foreach ($e in $entries) {
                 if (-not (Test-AsarEntryContains -AsarPath $AsarPath -DataOffset $info.DataOffset `
                                                  -Offset $e.Offset -Size $e.Size -Needle $rule.To)) {
@@ -293,21 +316,39 @@ function Invoke-PatchPass {
                     }
                 }
                 $alreadyPatched = $true
+                $alreadyEntry   = $e
                 break
             }
             if ($alreadyPatched) {
                 Write-Info ("    已打过补丁，跳过：{0}" -f $rule.Desc)
-                [void]$results.Add(@{ Id = $rule.Id; Desc = $rule.Desc; Critical = $rule.Critical; Status = 'already-patched'; Files = @() })
+                # 把"凭什么判它已打过"的那一条也记下来：下次就能只复查这一个条目。
+                $alrRecords = New-Object System.Collections.ArrayList
+                if ($alreadyEntry) {
+                    [void]$alrRecords.Add(@{
+                        id      = $rule.Id
+                        path    = $alreadyEntry.Path
+                        offset  = [long]$alreadyEntry.Offset
+                        size    = [long]$alreadyEntry.Size
+                        needle  = $rule.To
+                        context = $(if ($rule.ContainsKey('AlreadyPatchedContext')) { $rule.AlreadyPatchedContext } else { '' })
+                    })
+                }
+                [void]$results.Add(@{ Id = $rule.Id; Desc = $rule.Desc; Critical = $rule.Critical; Status = 'already-patched'; Files = @(); Entries = @($alrRecords) })
             } else {
                 Write-Warn ("    未命中：{0}" -f $rule.Desc)
                 if ($rule.Critical) { $criticalMiss++ }
-                [void]$results.Add(@{ Id = $rule.Id; Desc = $rule.Desc; Critical = $rule.Critical; Status = 'miss'; Files = @() })
+                [void]$results.Add(@{ Id = $rule.Id; Desc = $rule.Desc; Critical = $rule.Critical; Status = 'miss'; Files = @(); Entries = @() })
             }
             continue
         }
 
         $totalHits = 0
         $done = New-Object System.Collections.ArrayList
+        # 结构化地记下"改的是哪个文件、在数据区的哪个偏移"，写进 state.json，
+        # 供下次运行时免去全量扫描（见 Test-PatchRecordStillValid）。
+        # 只有路径不够用：定位条目要解析整个 5.8 MB 头部（实测 19 秒），
+        # 记下 offset/size 之后，复查就退化成"seek + 读那几百 KB"。
+        $entryRecords = New-Object System.Collections.ArrayList
         foreach ($e in $hitFiles) {
             $r = Invoke-AsarInPlacePatch -AsarPath $AsarPath -RelPath $e.Path `
                                          -Replacements @(@{ From = $rule.From; To = $rule.To; Desc = $rule.Desc }) `
@@ -315,6 +356,14 @@ function Invoke-PatchPass {
             if ($r.Status -eq 'ok') {
                 $totalHits += $r.Hits
                 [void]$done.Add(("{0} (命中 {1}, 完整性哈希更新 {2})" -f $e.Path, $r.Hits, $r.IntegrityUpdated))
+                [void]$entryRecords.Add(@{
+                    id      = $rule.Id
+                    path    = $e.Path
+                    offset  = [long]$e.Offset
+                    size    = [long]$e.Size
+                    needle  = $rule.To
+                    context = $(if ($rule.ContainsKey('AlreadyPatchedContext')) { $rule.AlreadyPatchedContext } else { '' })
+                })
             } elseif ($r.Status -eq 'length-mismatch') {
                 Write-Err ("    拒绝写入：替换前后长度不一致 @ {0}" -f $e.Path)
             } else {
@@ -329,10 +378,12 @@ function Invoke-PatchPass {
         }
         foreach ($d in $done) { Write-Info ("      " + $d) }
 
-        [void]$results.Add(@{ Id = $rule.Id; Desc = $rule.Desc; Critical = $rule.Critical; Status = 'ok'; Hits = $totalHits; Files = @($done) })
+        [void]$results.Add(@{ Id = $rule.Id; Desc = $rule.Desc; Critical = $rule.Critical; Status = 'ok'; Hits = $totalHits; Files = @($done); Entries = @($entryRecords) })
     }
 
-    return @{ Results = $results; CriticalMiss = $criticalMiss }
+    # DataOffset 一并带出去：它是"数据区起点"，下次复查要拿它换算 seek 位置。
+    # asar 没变它就一定没变，所以可以安全地记进 state.json。
+    return @{ Results = $results; CriticalMiss = $criticalMiss; DataOffset = [long]$info.DataOffset }
 }
 
 # ---------------------------------------------------------------- 子命令
@@ -415,6 +466,86 @@ function Show-Status {
     Write-Host ("STATE|{0}|{1}|{2}" -f $level, $stTitle, $stDetail)
 }
 
+function Test-PatchRecordStillValid {
+    <#
+      判断 state.json 里记的"上次打补丁结果"**现在是否依然成立**。
+      只有返回 $true 才允许跳过全量扫描。
+
+      依据就一条：**目标文件一个字节都没变**。
+        · asar 与 exe 的体积 + 最后写入时间都对得上；且
+        · 当时改动过的（或据以判定"已打过"的）那几条，现在仍然含 To（+上下文）
+
+      任何一处对不上、任何异常，一律 $false → 退回全量扫描。
+
+      ⚠️ 这里宁可慢也不能错：把"其实没打上"判成"已打好"，用户会看到英文界面而
+         工具报成功 —— 正是 Rules.ps1 里反复警告的那个坑。
+    #>
+    param(
+        # 刻意**不**标 Mandatory：首次运行时 state.json 还不存在，这里收到 $null
+        # 是正常情况（下面第一行就返回 $false，退回全量扫描）。标了 Mandatory
+        # 反而会在参数绑定阶段直接抛异常，一次安装都跑不起来。
+        $State,
+        [Parameter(Mandatory)][string]$TargetApp,
+        [Parameter(Mandatory)][string]$NowVersion,
+        [Parameter(Mandatory)][string]$Signature
+    )
+
+    try {
+        if (-not $State) { return $false }
+        $p = $State.patch
+        if (-not $p) { return $false }
+
+        # 上次有"关键补丁没命中"，说明 App 结构已变 —— 那种状态必须每次全量复核。
+        if ([int]$p.criticalMiss -gt 0) { return $false }
+
+        # 规则表改过（挑串/替换串/预期命中数变了）就不能再信任旧结论。
+        if ([string]$p.rulesSignature -ne $Signature) { return $false }
+
+        # 版本变了 → 副本可能已重拷 → 记下的偏移全不可信。
+        if ([string]::IsNullOrWhiteSpace($NowVersion) -or $NowVersion -eq 'unknown') { return $false }
+        if ([string]$State.version -ne $NowVersion) { return $false }
+
+        # 上次打的不是这个目录 → 不适用。
+        if ([string]::IsNullOrWhiteSpace($p.installPath) -or [string]$p.installPath -ne $TargetApp) { return $false }
+
+        $asarPath = Join-Path $TargetApp 'resources\app.asar'
+        $exePath  = Join-Path $TargetApp 'ChatGPT.exe'
+        if (-not (Test-Path -LiteralPath $asarPath)) { return $false }
+        if (-not (Test-Path -LiteralPath $exePath)) { return $false }
+
+        $asarItem = Get-Item -LiteralPath $asarPath
+        $exeItem  = Get-Item -LiteralPath $exePath
+        if ([long]$asarItem.Length -ne [long]$p.asarSize) { return $false }
+        if ([long]$asarItem.LastWriteTimeUtc.Ticks -ne [long]$p.asarTicks) { return $false }
+        if ([long]$exeItem.Length -ne [long]$p.exeSize) { return $false }
+        if ([long]$exeItem.LastWriteTimeUtc.Ticks -ne [long]$p.exeTicks) { return $false }
+
+        $records = @($p.entries)
+        if ($records.Count -eq 0) { return $false }
+
+        $dataOffset = [long]$p.dataOffset
+        foreach ($rec in $records) {
+            if (-not $rec) { return $false }
+            $needle = [string]$rec.needle
+            if ([string]::IsNullOrEmpty($needle)) { return $false }
+            if (-not (Test-AsarEntryContains -AsarPath $asarPath -DataOffset $dataOffset `
+                        -Offset ([long]$rec.offset) -Size ([long]$rec.size) -Needle $needle)) {
+                return $false
+            }
+            $ctx = [string]$rec.context
+            if (-not [string]::IsNullOrEmpty($ctx)) {
+                if (-not (Test-AsarEntryContains -AsarPath $asarPath -DataOffset $dataOffset `
+                            -Offset ([long]$rec.offset) -Size ([long]$rec.size) -Needle $ctx)) {
+                    return $false
+                }
+            }
+        }
+        return $true
+    } catch {
+        return $false
+    }
+}
+
 function Invoke-Install {
     param($Found, [string]$TargetDir, [switch]$Apply)
 
@@ -422,6 +553,12 @@ function Invoke-Install {
         Write-Err '未检测到 Codex。用 -Target 手动指定 app 目录。'
         return 1
     }
+
+    # 这几样在下面要用到多处（复制决策、快路径判定、状态落盘），先取一次。
+    $statePrev  = Read-StateFile -Path $configJson
+    $patchRules = Get-CodexPatchRules
+    $ruleSig    = Get-RulesSignature -Rules $patchRules
+    $nowVersion = if ($Found) { Get-CodexVersion -AppDir $Found.AppDir } else { 'unknown' }
 
     # 1) 决定补丁目标目录
     if ($TargetDir) {
@@ -443,14 +580,7 @@ function Invoke-Install {
                 # 版本变化检测 —— 这一步不能少。
                 # 商店版升级后，副本会停留在旧版本；只看"副本在不在"的话会永远跳过
                 # 重新复制，用户就一直在跑旧版 Codex 且毫无察觉。
-                $prevVersion = $null
-                if (Test-Path -LiteralPath $configJson) {
-                    try {
-                        $st = Get-Content -LiteralPath $configJson -Raw -Encoding UTF8 | ConvertFrom-Json
-                        $prevVersion = $st.version
-                    } catch {}
-                }
-                $nowVersion = Get-CodexVersion -AppDir $Found.AppDir
+                $prevVersion = if ($statePrev) { $statePrev.version } else { $null }
                 if ($prevVersion -and $nowVersion -and $prevVersion -ne $nowVersion) {
                     # 措辞刻意不判方向：这里只知道"变了"。之前写死"已升级"，
                     # 装旧版（降级）时会说反。
@@ -516,9 +646,34 @@ function Invoke-Install {
     # 2) 打补丁
     Write-Info ''
     Write-Info '--- 应用补丁 ---'
-    $patch = Invoke-PatchPass -AsarPath $asarPath -Apply:$Apply
-    if ($patch.CriticalMiss -gt 0) {
-        Write-Warn '关键补丁点未命中：界面很可能仍是英文。App 版本结构已变化，需要更新规则表。'
+
+    # ---- 快路径 ----
+    # 全量扫描 = 遍历 5.8 MB 头部（实测约 19 秒）+ 把 14770 个候选文件逐个读一遍
+    # （约 27 秒）；而重复运行时它其实什么都不会改（结果恒为"已打过补丁，跳过"）。
+    # 只要上次的记录**逐项复查仍然成立**（副本一个字节没变），就能整段跳过。
+    # 复查只读当时动过的那 1~2 个条目，约 1 毫秒。
+    # 任何一处对不上 → 照旧全量扫描。判定逻辑见 Test-PatchRecordStillValid。
+    $fastSkip = $false
+    if ($Apply -and (Test-PatchRecordStillValid -State $statePrev -TargetApp $targetApp `
+                        -NowVersion $nowVersion -Signature $ruleSig)) {
+        $fastSkip = $true
+        Write-Ok ('副本自上次打补丁后未变化（版本 {0}），跳过全量扫描。' -f $nowVersion)
+        $recorded = @($statePrev.patch.entries)
+        foreach ($rule in $patchRules) {
+            $hit = @($recorded | Where-Object { $_ -and $_.id -eq $rule.Id })
+            if ($hit.Count -gt 0) {
+                Write-Info ("    复查通过（已打过补丁）：{0}" -f $rule.Desc)
+            } else {
+                Write-Info ("    与上次相同（未命中）：{0}" -f $rule.Desc)
+            }
+        }
+    }
+
+    if (-not $fastSkip) {
+        $patch = Invoke-PatchPass -AsarPath $asarPath -Apply:$Apply
+        if ($patch.CriticalMiss -gt 0) {
+            Write-Warn '关键补丁点未命中：界面很可能仍是英文。App 版本结构已变化，需要更新规则表。'
+        }
     }
 
     # 2b) 同步嵌入式 asar 完整性哈希。
@@ -526,17 +681,23 @@ function Invoke-Install {
     #     （asar_util.cc:143 Integrity check failed），而不是"汉化没生效"。
     Write-Info ''
     Write-Info '--- 嵌入式完整性哈希 ---'
-    $emb = Update-EmbeddedAsarIntegrity -AppDir $targetApp -AsarPath $asarPath -Apply:$Apply
-    if ($emb.Status -eq 'updated') {
-        Write-Ok ("已同步 {0}" -f (Split-Path $emb.File -Leaf))
-        Write-Info ("  {0}" -f $emb.Old)
-        Write-Info ("  -> {0}" -f $emb.New)
-    } elseif ($emb.Status -eq 'already-ok') {
-        Write-Info ("已是最新 {0}" -f (Split-Path $emb.File -Leaf))
-    } elseif ($emb.Status -eq 'needs-update') {
-        Write-Warn ("待更新 {0}（DryRun 未写入）" -f (Split-Path $emb.File -Leaf))
+    if ($fastSkip) {
+        # asar 与 exe 都一个字节没变（上面的复查刚验过），说明头部没动、
+        # 嵌在 exe 里的那份哈希自然也还是对的 —— 不用重算。
+        Write-Info '已是最新 ChatGPT.exe（副本未变化，无需重算）'
     } else {
-        Write-Warn '未在二进制中找到嵌入式 asar 完整性记录（该构建可能未开启此校验）'
+        $emb = Update-EmbeddedAsarIntegrity -AppDir $targetApp -AsarPath $asarPath -Apply:$Apply
+        if ($emb.Status -eq 'updated') {
+            Write-Ok ("已同步 {0}" -f (Split-Path $emb.File -Leaf))
+            Write-Info ("  {0}" -f $emb.Old)
+            Write-Info ("  -> {0}" -f $emb.New)
+        } elseif ($emb.Status -eq 'already-ok') {
+            Write-Info ("已是最新 {0}" -f (Split-Path $emb.File -Leaf))
+        } elseif ($emb.Status -eq 'needs-update') {
+            Write-Warn ("待更新 {0}（DryRun 未写入）" -f (Split-Path $emb.File -Leaf))
+        } else {
+            Write-Warn '未在二进制中找到嵌入式 asar 完整性记录（该构建可能未开启此校验）'
+        }
     }
 
     # 3) localeOverride
@@ -547,19 +708,46 @@ function Invoke-Install {
     else            { Write-Info ("localeOverride 已是 {0}" -f $Language) }
 
     # 4) 状态落盘
-    if ($Apply) {
+    #
+    # 快路径时不重写：什么都没变，重写只会把 patchedAt 改成"这次运行的时间"，
+    # 那个时间应该如实指向真正打补丁的那一刻。
+    if ($Apply -and -not $fastSkip) {
         if (-not (Test-Path -LiteralPath $Root)) { New-Item -ItemType Directory -Path $Root -Force | Out-Null }
+
+        # 汇总"这次到底动了哪几个条目"，连同改完之后的文件指纹一起记下。
+        # 指纹用体积 + 最后写入时间：对 2 GB 的 asar 算哈希要好几秒，
+        # 而这两样已经足以判断"文件有没有被碰过"。
+        $allEntries = New-Object System.Collections.ArrayList
+        foreach ($res in @($patch.Results)) {
+            foreach ($rec in @($res.Entries)) {
+                if ($rec) { [void]$allEntries.Add($rec) }
+            }
+        }
+        $asarItem = Get-Item -LiteralPath $asarPath
+        $exeItem  = Get-Item -LiteralPath (Join-Path $targetApp 'ChatGPT.exe')
+
         $state = @{
-            schemaVersion = 1
+            schemaVersion = 2
             mode          = $mode
             sourcePath    = if ($Found) { $Found.AppDir } else { $null }
             installPath   = $targetApp
-            version       = if ($Found) { Get-CodexVersion -AppDir $Found.AppDir } else { 'unknown' }
+            version       = $nowVersion
             language      = $Language
             patchedAt     = (Get-Date).ToString('s')
+            patch         = @{
+                installPath    = $targetApp
+                rulesSignature = $ruleSig
+                criticalMiss   = [int]$patch.CriticalMiss
+                dataOffset     = [long]$patch.DataOffset
+                asarSize       = [long]$asarItem.Length
+                asarTicks      = [long]$asarItem.LastWriteTimeUtc.Ticks
+                exeSize        = [long]$exeItem.Length
+                exeTicks       = [long]$exeItem.LastWriteTimeUtc.Ticks
+                entries        = @($allEntries)
+            }
         }
-        [System.IO.File]::WriteAllText($configJson, ($state | ConvertTo-Json -Depth 5), (New-Object System.Text.UTF8Encoding($false)))
-        Write-Log ("install mode=$mode target=$targetApp version=$($state.version)")
+        [System.IO.File]::WriteAllText($configJson, ($state | ConvertTo-Json -Depth 8), (New-Object System.Text.UTF8Encoding($false)))
+        Write-Log ("install mode=$mode target=$targetApp version=$nowVersion entries=$($allEntries.Count)")
     }
 
     # 注：这里此前会创建「ChatGPT 中文版」快捷方式。v1.2.2 起**不再创建** ——
