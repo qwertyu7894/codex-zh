@@ -8,8 +8,8 @@ using System.Windows;
 [assembly: System.Reflection.AssemblyCompany("Codex Localization Enhancer Community")]
 [assembly: System.Reflection.AssemblyProduct(CodexZhLauncher.AppInfo.BrandName)]
 [assembly: System.Reflection.AssemblyCopyright("Copyright 2026")]
-[assembly: System.Reflection.AssemblyVersion("1.3.0.0")]
-[assembly: System.Reflection.AssemblyFileVersion("1.3.0.0")]
+[assembly: System.Reflection.AssemblyVersion("1.3.1.0")]
+[assembly: System.Reflection.AssemblyFileVersion("1.3.1.0")]
 
 namespace CodexZhLauncher
 {
