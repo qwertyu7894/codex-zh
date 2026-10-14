@@ -628,14 +628,23 @@ namespace CodexZhLauncher
             // 下面的 await 会让状态轮询跑起来，而轮询在 Codex 退出时会把
             // lastLaunchReport 清成 null。
             var routeMode = lastLaunchReport == null ? null : lastLaunchReport.Mode;
+            var launchComplete = lastLaunchReport != null && lastLaunchReport.Complete;
+
+            // 变体版（build.ps1 -DesktopShortcut）才建图标：指向**本工具自身**，
+            // 让客户"跑一次 → 桌面出现图标 → 以后双击图标进中文版"。
+            // 主版本的 AppInfo.CreateDesktopShortcut 恒为 false，这里什么都不做 ——
+            // 原因见 LocalizationRuntime.RefreshShortcutsAsync 的注释。
+            if (AppInfo.CreateDesktopShortcut && launchComplete)
+            {
+                await LocalizationRuntime.RefreshShortcutsAsync(
+                    currentInstall,
+                    delegate(string message) { AppendLog(message, TextSecondary); });
+            }
 
             // 启动成功之后的收尾（刻意放在 finally 之外：
             // C# 5 不允许在 finally 子句里 await，CS1984）：
             // 重新探测 —— 回退路线可能刚把副本重拷过，版本号变了。
-            //
-            // 刻意**不**创建/重指快捷方式：本版起用户直接启动本工具即可，
-            // 不再往桌面和开始菜单塞东西。
-            if (lastLaunchReport != null && lastLaunchReport.Complete)
+            if (launchComplete)
             {
                 await DetectInstallAsync();
             }
