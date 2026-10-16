@@ -7,6 +7,31 @@
 
 ---
 
+## v1.3.2
+
+### 修复：任务栏 / 开始菜单里的图标不再是一张白纸
+
+汉化必须**未打包启动** Codex（直接跑 exe，否则调试端口开不了、注入进不去）。
+这样一跑，Codex 用的是**它自己声明的** AUMID（`com.openai.codex`），而那个
+AUMID 从来没注册过图标 —— 任务栏和开始菜单只好画一张白纸，看着像出错了。
+
+现在启动前会做两件小事：
+
+- 把 App 自带的多尺寸 `.ico` 拷到**稳定路径**
+  `%LOCALAPPDATA%\CodexZhLauncher\icons\codex-app.ico`
+  （不能直接指 `WindowsApps` 里那个 —— Codex 一升级，带版本号的目录就没了，
+  图标又会变白）
+- 在 `HKCU\Software\Classes\AppUserModelId\com.openai.codex` 下写好
+  `DisplayName` 与 `IconUri`
+
+只做一次；值已经对了就完全不碰注册表。失败也不影响汉化，只记一行日志。
+
+> ⚠️ 这是本项目**唯一**写注册表的地方，而且只写 HKCU 下的一个键：
+> 不给系统或别的用户装任何东西，**删掉那个键即恢复原样**。
+> README 与使用说明里的"不写注册表"已改成精确表述。
+
+---
+
 ## v1.3.1
 
 ### 提速：已经汉化好的机器不再每次重扫

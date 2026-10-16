@@ -96,6 +96,16 @@ namespace CodexZhLauncher
             process.OutputDataReceived += delegate { };
             process.ErrorDataReceived += delegate { };
 
+            // 未打包启动会让任务栏/开始菜单里的图标退化成一张白纸
+            // （App 声明自己的 AUMID，而它没注册过图标）—— 修它，见 AppIconRegistration。
+            //
+            // 刻意放在 Start **之前**：任务栏按钮是在窗口创建时就去找图标的，
+            // 晚一步这一轮就来不及，得等下次启动才好看。
+            //
+            // 两条路线（注入 / 磁盘补丁）都从这里启动，所以接在这一处就全覆盖了 ——
+            // 补丁路线跑的是副本，副本也是未打包运行、AUMID 一样。
+            AppIconRegistration.Ensure(install);
+
             if (!process.Start()) throw new InvalidOperationException("Codex Desktop 启动失败。");
             process.BeginOutputReadLine();
             process.BeginErrorReadLine();
