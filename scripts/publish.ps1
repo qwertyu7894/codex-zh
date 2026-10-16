@@ -24,8 +24,10 @@ if ($LASTEXITCODE -ne 0) { throw '版本号对不上，已中止发布。' }
 & (Join-Path $root 'build.ps1') -Configuration Release `
     -Brand 'Codex 汉化增强工具' -OutputName 'CodexZh-Windows-x64.exe'
 
+# 交付品牌的这一份：build.ps1 自己就会把成品同步到 -HandoffDir（见它的"交付副本"
+# 那段）。这里显式传一遍，只为保证自定义 -HandoffDir 时两边落在同一个目录。
 & (Join-Path $root 'build.ps1') -Configuration Release `
-    -Brand 'GPT汉化' -OutputName 'GPTHanhua.exe'
+    -Brand 'GPT汉化' -OutputName 'GPTHanhua.exe' -HandoffDir $HandoffDir
 
 python (Join-Path $root 'scripts\package.py') --handoff $HandoffDir
 if ($LASTEXITCODE -ne 0) { throw "package.py 失败，退出码 $LASTEXITCODE" }

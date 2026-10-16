@@ -21,7 +21,13 @@ param(
     [switch]$DesktopShortcut,
 
     # 快捷方式的显示名。留空则用 $Brand。
-    [string]$ShortcutName = ''
+    [string]$ShortcutName = '',
+
+    # 交付副本目录（默认 %USERPROFILE%\Music）。见文件末尾"交付副本"那段。
+    [string]$HandoffDir = '',
+
+    # 跳过交付副本同步（构建别人要的成品、或临时试验时用）。
+    [switch]$NoHandoff
 )
 
 $ErrorActionPreference = 'Stop'
@@ -193,3 +199,29 @@ $checksumFile = Join-Path $outputDir 'SHA256SUMS.txt'
 )
 Write-Host "Build completed: $outputFile"
 Write-Host "SHA-256: $($hash.Hash)"
+
+# ---------------------------------------------------------------- 交付副本
+#
+# 用户是**直接从音乐文件夹**把单个 exe 发给客户的。这个目录必须始终是最新构建，
+# **跟发不发 GitHub Release 完全是两回事**（Release 见 scripts/release.ps1）。
+#
+# 为什么做进 build.ps1 而不是只靠 publish.ps1：只跑 build.ps1 就忘了同步的情况
+# 真实发生过（2026-10-16），结果是源码已经是新的、发出去的还是旧的。
+# 做进构建这一步，就不依赖"记得跑另一条命令"了。
+#
+# 只同步交付品牌那一个：构建 Codex 汉化增强工具、或构建变体版时都不动它。
+# ⚠️ 这个常量与 scripts/package.py 的 HANDOFF_EXE 必须一致 —— 改一处要改两处。
+$handoffExe = 'GPTHanhua.exe'
+if (-not $NoHandoff -and [System.IO.Path]::GetFileName($outputFile) -eq $handoffExe) {
+    $targetDir = if ([string]::IsNullOrWhiteSpace($HandoffDir)) {
+        Join-Path $env:USERPROFILE 'Music'
+    } else { $HandoffDir }
+    try {
+        if (-not (Test-Path -LiteralPath $targetDir)) { New-Item -ItemType Directory -Path $targetDir -Force | Out-Null }
+        $target = Join-Path $targetDir $handoffExe
+        Copy-Item -LiteralPath $outputFile -Destination $target -Force
+        Write-Host "交付副本已同步: $target"
+    } catch {
+        Write-Warning "交付副本同步失败（不影响本次构建）：$($_.Exception.Message)"
+    }
+}
