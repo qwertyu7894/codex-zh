@@ -7,6 +7,29 @@
 
 ---
 
+## v1.4.0
+
+### 根治：磁盘补丁逻辑全部迁入 C#，不再释放脚本、不再调用 PowerShell
+
+旧实现会在运行时把 3 个 `.ps1` 释放到
+`%LOCALAPPDATA%\CodexZhLauncher\scripts\`，再用
+`powershell.exe -ExecutionPolicy Bypass -Command` 执行。这套组合在杀软眼里
+是典型的"脚本投放器"，客户机上的 360 因此报毒。
+
+现在 asar 读写、等长替换、per-file SHA-256、头部哈希写回、规则扫描、
+快路径判定、复制/备份、`state.json`、`config.toml` 与快捷方式全部由 C# 实现：
+
+- 运行时**不再释放任何脚本**，exe 里也不再嵌入 `.ps1`。
+- 默认链路**不再启动 PowerShell**。MSIX 包探测改为直接读
+  `HKCU\...\AppModel\Repository\Packages`（`NativePackageLocator`）。
+- 升级时一次性清理旧版本留下的三个已知脚本文件。
+- 用户可见功能与磁盘补丁产物保持不变；回归验证以"同一份 asar 用新旧实现
+  分别处理，产物 SHA-256 完全相同"为门禁。
+- 新增 `tests/LocalizationHarness.cs`、`tests/oracle/*.ps1` 与
+  `test-localization.ps1`，用于新旧实现的字节级对照。
+
+`localize/` 目录保留为历史参考，不再参与构建。
+
 ## v1.3.2
 
 ### 加固：注入启动失败时自动重试一次

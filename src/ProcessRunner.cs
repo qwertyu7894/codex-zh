@@ -19,7 +19,7 @@ namespace CodexZhLauncher
         /// 否则超时即杀掉子进程并返回**失败结果**（不是抛异常）——
         /// 让调用方按普通失败处理，不会把异常冒到 UI。
         ///
-        /// 为什么需要它：`Get-AppxPackage` 在 AppXSvc / Store 繁忙时会长时间不返回，
+        /// 为什么需要它：部分系统查询在 AppXSvc / Store 繁忙时会长时间不返回，
         /// 而调用方是 `await` 它的 —— 没有超时就会永久挂住，
         /// 表现为界面卡在「正在检测 Codex」且主按钮一直禁用。
         /// </summary>
