@@ -248,7 +248,7 @@ namespace CodexZhLauncher
             // 旧快捷方式指向的副本（老快捷方式 TargetPath 就是副本 exe）。两者共用同一个
             // Electron 单实例锁 —— 不把副本一起关掉，注入启动的实例会被它顶掉，
             // 而界面又显示"没有 Codex 在运行"，于是变成静默失败。
-            if (IsWithinDirectory(fullPath, LocalizationRuntime.LocalizedAppDir))
+            if (IsWithinDirectory(fullPath, LocalizationPaths.AppDir))
                 return true;
 
             if (install.IsStorePackage)
@@ -395,7 +395,7 @@ namespace CodexZhLauncher
             {
                 return String.Equals(
                     TrimDirectorySeparator(Path.GetFullPath(install.InstallLocation)),
-                    TrimDirectorySeparator(Path.GetFullPath(LocalizationRuntime.LocalizedAppDir)),
+                    TrimDirectorySeparator(Path.GetFullPath(LocalizationPaths.AppDir)),
                     StringComparison.OrdinalIgnoreCase);
             }
             catch

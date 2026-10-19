@@ -39,10 +39,8 @@ $outputDir = Join-Path $projectRoot 'dist'
 $intermediateDir = Join-Path $projectRoot 'obj'
 $outputFile = Join-Path $outputDir $OutputName
 
-# 汉化逻辑的唯一事实来源：仓库内的 localize\ 下的三个脚本。
-# 它们以嵌入资源形式打进 exe，运行时由 LocalizationRuntime 释放并调用。
-# 改逻辑只改那三个脚本、重新 build 即可，C# 侧无需任何改动。
-$localizeDir = Join-Path $projectRoot 'localize'
+# 磁盘补丁逻辑自 v1.4.0 起全部在 src\ 的 C# 引擎里实现。
+# localize\ 下的三个脚本保留为历史参考，但不再参与构建、不嵌入 exe。
 $iconFile = Join-Path $intermediateDir 'AppIcon.ico'
 $iconGenerator = Join-Path $projectRoot 'scripts\generate-windows-icon.ps1'
 $frameworkRoot = Join-Path $env:WINDIR 'Microsoft.NET\Framework64\v4.0.30319'
@@ -89,18 +87,6 @@ $sharedResources = @(
 foreach ($resource in $sharedResources) {
     if (-not (Test-Path -LiteralPath $resource.Path)) {
         throw "Missing shared resource: $($resource.Path)"
-    }
-}
-
-# 汉化脚本（嵌入资源）。资源名必须与 LocalizationRuntime.ScriptNames 完全一致。
-$localizeResources = @(
-    @{ Path = (Join-Path $localizeDir 'CodexZh.ps1');     Name = 'CodexZh.ps1' },
-    @{ Path = (Join-Path $localizeDir 'AsarInPlace.ps1'); Name = 'AsarInPlace.ps1' },
-    @{ Path = (Join-Path $localizeDir 'Rules.ps1');       Name = 'Rules.ps1' }
-)
-foreach ($resource in $localizeResources) {
-    if (-not (Test-Path -LiteralPath $resource.Path)) {
-        throw "Missing localize script: $($resource.Path)（应位于 ..\codex-zh\ 下）"
     }
 }
 
@@ -156,9 +142,6 @@ foreach ($reference in $references) {
     $compilerArgs += "/reference:$reference"
 }
 foreach ($resource in $sharedResources) {
-    $compilerArgs += "/resource:$($resource.Path),$($resource.Name)"
-}
-foreach ($resource in $localizeResources) {
     $compilerArgs += "/resource:$($resource.Path),$($resource.Name)"
 }
 $compilerArgs += "/resource:$iconFile,CodexZhLauncher.AppIcon.ico"

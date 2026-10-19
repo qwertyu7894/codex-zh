@@ -79,9 +79,11 @@
 > 实测在新版上仍然可用。而 `--inspect` 那条路已经死了，所以**不要**把它加回来
 > （`--self-test` 里有断言拦着）。
 
-### 回退：磁盘补丁（`localize/`，PowerShell）
+### 回退：磁盘补丁（C# 内置引擎）
 
 注入不成功时自动回退（回退前必须先关掉刚启动的实例 —— 与副本共用单实例锁）。
+自 v1.4.0 起，这套逻辑全部在 `src/` 的 C# 引擎里实现：**不再释放任何 `.ps1`，
+也不再启动 PowerShell**（`localize/` 仅作为历史参考保留）。
 改 `app.asar` 内 `enable_i18n` 的**默认值** `false` → `true`，
 改完**必须**同步两处哈希，否则 App 启动瞬间崩溃：
 
@@ -110,8 +112,8 @@ Integrity check failed for asar archive
 **不需要任何 SDK** —— 用 Windows 自带的
 `%WINDIR%\Microsoft.NET\Framework64\v4.0.30319\csc.exe` 编译。
 
-汉化逻辑位于 `localize\`，构建时以**嵌入资源**打进 exe，运行时释放到
-`%LOCALAPPDATA%\CodexZhLauncher\scripts\` 并调用。
+汉化逻辑位于 `src\`（asar 读写、完整性哈希、规则、状态与安装流程均为 C# 实现），
+**不再嵌入或释放任何脚本**。`localize\` 里的旧 PowerShell 实现只作为历史参考保留。
 **逻辑只有一份**：改 `localize\` 下的脚本后重新构建即可，C# 侧无需改动。
 
 ---
@@ -197,7 +199,7 @@ Codex 什么时候更新，下次打开就是最新版 + 中文。**不需要任
 
 | 路径 | 说明 |
 | --- | --- |
-| `localize/` | 汉化逻辑（PowerShell，唯一事实来源） |
+| `localize/` | 旧 PowerShell 实现（**历史参考，不参与构建**） |
 | `src/` | Windows 桌面端（C# / WPF，无 XAML，UI 全部代码构建） |
 | `macos/` | macOS 端（Swift）—— **本分支未适配，仍是上游原样** |
 | `shared/` | 注入载荷（`i18n-bootstrap.js`、`locale-script.js` 等）—— **运行时注入路线正在使用** |

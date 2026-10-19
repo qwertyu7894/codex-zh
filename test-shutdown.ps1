@@ -26,6 +26,7 @@ if ($LASTEXITCODE -ne 0) { throw "Fixture compilation failed: $LASTEXITCODE" }
     "/reference:$(Join-Path $frameworkRoot 'System.Core.dll')" `
     (Join-Path $projectRoot 'src\Models.cs') `
     (Join-Path $projectRoot 'src\AppLog.cs') `
+    (Join-Path $projectRoot 'src\LocalizationPaths.cs') `
     (Join-Path $projectRoot 'src\CodexProcessManager.cs') `
     (Join-Path $projectRoot 'tests\ShutdownTests.cs')
 if ($LASTEXITCODE -ne 0) { throw "Shutdown test compilation failed: $LASTEXITCODE" }

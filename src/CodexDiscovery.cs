@@ -232,41 +232,34 @@ namespace CodexZhLauncher
             return CodexProcessManager.Scan(install).TotalPotentialCount;
         }
 
-        private static async Task<CodexInstall> DetectStorePackageAsync()
+        private static Task<CodexInstall> DetectStorePackageAsync()
         {
-            var command =
-                "$p = Get-AppxPackage -Name '" + PackageName + "' | Sort-Object Version -Descending | Select-Object -First 1; " +
-                "if ($null -ne $p) { [pscustomobject]@{ Version=$p.Version.ToString(); PackageFamilyName=$p.PackageFamilyName; InstallLocation=$p.InstallLocation } | ConvertTo-Json -Compress }";
-            // 带超时：Get-AppxPackage 在 AppXSvc / Store 繁忙时会长时间不返回，
-            // 而调用方是 await 它的 —— 没有兜底会把界面永久卡在「正在检测 Codex」。
-            var result = await ProcessRunner.RunAsync(
-                "powershell.exe",
-                "-NoProfile -NonInteractive -ExecutionPolicy Bypass -Command " + ProcessRunner.QuoteArgument(command),
-                TimeSpan.FromSeconds(15));
-
-            if (!result.Success || String.IsNullOrWhiteSpace(result.Output)) return null;
-
-            var serializer = new JavaScriptSerializer();
-            var values = serializer.Deserialize<Dictionary<string, object>>(result.Output.Trim());
-            if (values == null) return null;
-
-            var installLocation = GetString(values, "InstallLocation");
-            var familyName = GetString(values, "PackageFamilyName");
-            if (String.IsNullOrWhiteSpace(installLocation) || String.IsNullOrWhiteSpace(familyName)) return null;
-
-            var applicationId = ReadApplicationId(Path.Combine(installLocation, "AppxManifest.xml"));
-            if (String.IsNullOrWhiteSpace(applicationId)) applicationId = "App";
-
-            var executable = FindPackagedExecutable(installLocation);
-            return new CodexInstall
+            // 原生读 HKCU 的 MSIX 包仓库，不再启动 PowerShell 子进程。
+            // 返回语义与旧实现一致：精确包名 + 最高版本。
+            try
             {
-                Kind = "Microsoft Store",
-                DisplayName = "Codex Desktop（Microsoft Store）",
-                Version = GetString(values, "Version") ?? "-",
-                InstallLocation = installLocation,
-                ExecutablePath = executable,
-                AppUserModelId = familyName + "!" + applicationId
-            };
+                var package = NativePackageLocator.FindNewest(PackageName);
+                if (package == null || String.IsNullOrWhiteSpace(package.InstallLocation))
+                    return Task.FromResult<CodexInstall>(null);
+
+                var applicationId = ReadApplicationId(Path.Combine(package.InstallLocation, "AppxManifest.xml"));
+                if (String.IsNullOrWhiteSpace(applicationId)) applicationId = "App";
+
+                var executable = FindPackagedExecutable(package.InstallLocation);
+                return Task.FromResult(new CodexInstall
+                {
+                    Kind = "Microsoft Store",
+                    DisplayName = "Codex Desktop（Microsoft Store）",
+                    Version = String.IsNullOrWhiteSpace(package.Version) ? "-" : package.Version,
+                    InstallLocation = package.InstallLocation,
+                    ExecutablePath = executable,
+                    AppUserModelId = package.PackageFamilyName + "!" + applicationId
+                });
+            }
+            catch
+            {
+                return Task.FromResult<CodexInstall>(null);
+            }
         }
 
         private static CodexInstall LoadPortableInstall()
