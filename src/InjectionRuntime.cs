@@ -40,6 +40,13 @@ namespace CodexZhLauncher
         /// <summary>多久补一次注入。</summary>
         private static readonly TimeSpan ReinjectInterval = TimeSpan.FromSeconds(3);
 
+        // 启动后先观察这么久：进程早退说明被单实例锁挡住了
+        // （实测强杀后只隔 0.77 秒重启必翻车，隔 3 秒就没事）。
+        private static readonly TimeSpan LockProbeDelay = TimeSpan.FromMilliseconds(1500);
+
+        // 早退后等这么久再重试一次。
+        private static readonly TimeSpan LockRetryDelay = TimeSpan.FromMilliseconds(3000);
+
         public static async Task<LaunchReport> LaunchAsync(
             CodexInstall source,
             string locale,
@@ -80,7 +87,33 @@ namespace CodexZhLauncher
             report.ProcessId = AppActivation.LaunchUnpackaged(source, arguments);
             report.Started = true;
 
-            Report(onProgress, "Codex 已启动，正在连接汉化接口…");
+            // 强杀之后，单实例锁要过一会儿才真正释放。实测（2026-10-19）：
+            // 杀完只隔 **0.77 秒**就重启，新实例会**直接自退** —— 窗口根本没起来，
+            // 页面自然也等不到，25 秒后表现为"等待调试目标超时"；而手工隔 3 秒再
+            // 启动则一次成功。日志里两次失败都卡在这个 ~0.8 秒的间隔上。
+            //
+            // 这里**不**盲目加固定延时（那会拖慢每一次正常重启）：
+            // 启动后等一小会儿看进程还在不在，早退就说明锁没放掉，等够再重来一次。
+            if (!await WaitStaysAliveAsync(report.ProcessId, LockProbeDelay))
+            {
+                AppLog.Write("inject.early-exit pid=" + report.ProcessId +
+                    " —— 疑似单实例锁未释放，等待 " + (int)LockRetryDelay.TotalMilliseconds + "ms 后重试一次");
+                Report(onProgress, "上次启动被旧实例挡住了，正在等待并重试…");
+
+                await Task.Delay(LockRetryDelay);
+
+                // 换一个新端口：旧端口可能已被那个"刚起来就退出"的实例半途绑过。
+                rendererPort = AppActivation.ReserveLoopbackPort();
+                report.RendererPort = rendererPort;
+                arguments = AppActivation.BuildInjectionArguments(rendererPort, locale);
+                report.ProcessId = AppActivation.LaunchUnpackaged(source, arguments);
+                AppLog.Write("inject.retry path=" + source.ExecutablePath + " port=" + rendererPort);
+                Report(onProgress, "Codex 已重新启动，正在连接汉化接口…");
+            }
+            else
+            {
+                Report(onProgress, "Codex 已启动，正在连接汉化接口…");
+            }
 
             DevToolsTarget target;
             try
@@ -259,6 +292,48 @@ namespace CodexZhLauncher
             if (String.IsNullOrWhiteSpace(value)) return 0;
             int parsed;
             return Int32.TryParse(value.Trim(), out parsed) ? parsed : 0;
+        }
+
+        /// <summary>
+        /// 观察一段时间，看这个进程是否**一直活着**。
+        ///
+        /// 用来识别"刚启动就自退"：Codex 强杀后单实例锁不会立刻释放，
+        /// 这时再启动，新实例会马上退出（窗口都没起来）。返回 false 就该
+        /// 等一会儿重试，而不是干等 25 秒的调试目标超时。
+        ///
+        /// 刻意用 async + Task.Delay 而不是 Thread.Sleep：本方法在 UI 线程的
+        /// 调用链上，阻塞等待会有卡界面的风险。
+        /// </summary>
+        private static async Task<bool> WaitStaysAliveAsync(uint processId, TimeSpan grace)
+        {
+            try
+            {
+                var id = unchecked((int)processId);
+                var deadline = DateTime.UtcNow + grace;
+                while (DateTime.UtcNow < deadline)
+                {
+                    try
+                    {
+                        using (var process = System.Diagnostics.Process.GetProcessById(id))
+                        {
+                            if (process.HasExited) return false;
+                        }
+                    }
+                    catch (ArgumentException)
+                    {
+                        return false;   // 进程已经不在了 = 早退
+                    }
+
+                    await Task.Delay(150).ConfigureAwait(false);
+                }
+                return true;
+            }
+            catch (Exception ex)
+            {
+                // 判断不了就当它活着，走原来的路径 —— 别因为探测失败误伤正常启动。
+                AppLog.Write("inject.alive.probe.failed " + ex.Message);
+                return true;
+            }
         }
 
         private static void Report(Action<string> callback, string message)
