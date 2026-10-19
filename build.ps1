@@ -216,11 +216,28 @@ if (-not $NoHandoff -and [System.IO.Path]::GetFileName($outputFile) -eq $handoff
     $targetDir = if ([string]::IsNullOrWhiteSpace($HandoffDir)) {
         Join-Path $env:USERPROFILE 'Music'
     } else { $HandoffDir }
+    $target = Join-Path $targetDir $handoffExe
     try {
         if (-not (Test-Path -LiteralPath $targetDir)) { New-Item -ItemType Directory -Path $targetDir -Force | Out-Null }
-        $target = Join-Path $targetDir $handoffExe
-        Copy-Item -LiteralPath $outputFile -Destination $target -Force
-        Write-Host "交付副本已同步: $target"
+
+        # 先清掉上次"改名腾位置"留下的旧文件（那时它还被运行中的进程锁着）。
+        Get-ChildItem -LiteralPath $targetDir -Filter ($handoffExe + '.old-*') -ErrorAction SilentlyContinue |
+            ForEach-Object { try { Remove-Item -LiteralPath $_.FullName -Force -ErrorAction Stop } catch { } }
+
+        try {
+            Copy-Item -LiteralPath $outputFile -Destination $target -Force -ErrorAction Stop
+            Write-Host "交付副本已同步: $target"
+        }
+        catch {
+            # 目标正在运行（被锁）时不能直接覆盖 —— 但 **正在运行的 exe 允许改名**。
+            # 把旧的挪开，新的放进去：正在跑的那个进程继续用改名后的文件，
+            # 下次启动就是新版。这样"工具开着"也不会让音乐文件夹落后。
+            $stale = $target + '.old-' + (Get-Date -Format 'HHmmss')
+            Move-Item -LiteralPath $target -Destination $stale -Force -ErrorAction Stop
+            Copy-Item -LiteralPath $outputFile -Destination $target -Force -ErrorAction Stop
+            Write-Host "交付副本已同步（旧的那份正在运行，已改名为 $(Split-Path $stale -Leaf)）: $target"
+            try { Remove-Item -LiteralPath $stale -Force -ErrorAction Stop } catch { }
+        }
     } catch {
         Write-Warning "交付副本同步失败（不影响本次构建）：$($_.Exception.Message)"
     }
