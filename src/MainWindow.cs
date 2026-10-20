@@ -55,6 +55,9 @@ namespace CodexZhLauncher
         private int lastRunningCount = -1;
         private string shutdownFailureDetail;
         private bool copyCleanupAsked;
+        // 上次启动失败/未完全生效的原因。UpdatePresentation 会被状态轮询反复调用，
+        // 必须留一个字段把失败状态撑住，否则几秒后就会被“已就绪”覆盖。
+        private string lastLaunchFailure;
 
         [DllImport("dwmapi.dll")]
         private static extern int DwmSetWindowAttribute(
@@ -555,6 +558,16 @@ namespace CodexZhLauncher
             shutdownFailureDetail = null;
             lastLaunchReport = null;
             SetRestartButtonMode(false);
+
+            // 启动失败/汉化未完全生效：保留错误状态，不要让轮询把它改成“已就绪”。
+            if (!String.IsNullOrEmpty(lastLaunchFailure))
+            {
+                SetStatus("上次汉化失败", lastLaunchFailure, Danger);
+                primaryLabel.Text = "重试汉化并启动";
+                primaryButton.IsEnabled = true;
+                return;
+            }
+
             var source = currentInstall.Kind == "Microsoft Store"
                 ? "Microsoft Store · 包版本 " + currentInstall.Version
                 : currentInstall.DisplayName + " · " + currentInstall.Version;
@@ -563,12 +576,12 @@ namespace CodexZhLauncher
                 // 副本对运行时注入已经没有用了 —— 它只是磁盘补丁那一版的旧快照，
                 // 留着占 2 GB 而且会逐版过期。但不自动删：那是用户磁盘上的东西，得他自己点头。
                 SetStatus("已就绪 · 有旧副本可清理",
-                    source + " · 将以运行时注入方式汉化；另有旧的本地化副本（约 2 GB），启动时会问是否删除",
+                    source + " · 启动时会先尝试运行时注入，失败自动回退磁盘补丁；另有旧的本地化副本（约 2 GB），启动时会问是否删除",
                     Success);
             }
             else
             {
-                SetStatus("已就绪", source + " · 将以运行时注入方式汉化", Success);
+                SetStatus("已就绪", source + " · 启动时会先尝试运行时注入，失败自动回退磁盘补丁", Success);
             }
             primaryLabel.Text = "汉化并启动";
             primaryButton.IsEnabled = true;
@@ -579,9 +592,16 @@ namespace CodexZhLauncher
             if (busy || currentInstall == null) return;
             shutdownFailureDetail = null;
             lastLaunchReport = null;
+            lastLaunchFailure = null;
             SetBusy(true, "正在汉化并启动", "请稍候，进度会显示在下方日志中");
             AppendLog("开始启动中文版 Codex。", Accent);
             AppLog.Write("ui.launch.begin locale=zh-CN");
+
+            // 路线/成败必须在 finally 之前捕获：UpdatePresentation 会在没有 Codex
+            // 进程时把 lastLaunchReport 清空，之后再读就拿不到路线了（会误删副本）。
+            string routeMode = null;
+            bool launchComplete = false;
+
             try
             {
                 // 路线决策全在 LaunchCoordinator：先试运行时注入，失败自动回退磁盘补丁。
@@ -590,6 +610,15 @@ namespace CodexZhLauncher
                     "zh-CN",
                     delegate(string message) { AppendLog(message, TextSecondary); });
                 lastLaunchReport = report;
+                routeMode = report.Mode;
+                launchComplete = report.Complete;
+                if (launchComplete)
+                    lastLaunchFailure = null;
+                else
+                    lastLaunchFailure = String.IsNullOrWhiteSpace(report.Message)
+                        ? "汉化未完全生效"
+                        : report.Message;
+
                 if (String.Equals(report.Mode, "patch", StringComparison.Ordinal))
                 {
                     // 注意：日志面板是纯文本，不渲染 Markdown —— 别在这里用 **强调**，
@@ -614,6 +643,7 @@ namespace CodexZhLauncher
             }
             catch (Exception ex)
             {
+                lastLaunchFailure = ex.Message;
                 SetStatus("启动失败", ex.Message, Danger);
                 AppendLog("启动失败：" + ex.Message, Danger);
                 AppLog.Write("launch.ui.failed " + ex);
@@ -623,12 +653,6 @@ namespace CodexZhLauncher
                 SetBusy(false, null, null);
                 UpdatePresentation();
             }
-
-            // 本次走的是哪条路线 —— 副本要不要清理取决于它，所以先记下来：
-            // 下面的 await 会让状态轮询跑起来，而轮询在 Codex 退出时会把
-            // lastLaunchReport 清成 null。
-            var routeMode = lastLaunchReport == null ? null : lastLaunchReport.Mode;
-            var launchComplete = lastLaunchReport != null && lastLaunchReport.Complete;
 
             // 变体版（build.ps1 -DesktopShortcut）才建图标：指向**本工具自身**，
             // 让客户"跑一次 → 桌面出现图标 → 以后双击图标进中文版"。
@@ -649,8 +673,12 @@ namespace CodexZhLauncher
                 await DetectInstallAsync();
             }
 
+            // 只有“本次确实成功走了运行时注入”才考虑清理副本。
+            // 补丁路线/失败/路线未知一律不问、更不能删 —— 副本是补丁路线的必需品。
             // 每会话最多看一次；"以后不再问"由 AppSettings 持久化。
-            if (!copyCleanupAsked)
+            if (launchComplete &&
+                String.Equals(routeMode, "inject", StringComparison.Ordinal) &&
+                !copyCleanupAsked)
             {
                 copyCleanupAsked = true;
                 OfferCopyCleanup(routeMode);
@@ -692,6 +720,14 @@ namespace CodexZhLauncher
                 AppendLog("本机运行时注入不可用，汉化靠的是本地化副本 —— 这份副本不能删，" +
                     "删了下次要重拷约 2 GB。", TextSecondary);
                 AppLog.Write("copy.cleanup.skip route=patch");
+                return;
+            }
+
+            // 失败/路线未知：同样不能删。只有确认注入成功才允许删副本。
+            if (!String.Equals(launchMode, "inject", StringComparison.Ordinal))
+            {
+                AppendLog("本次启动没有确认注入成功，本地化副本不能删。", TextSecondary);
+                AppLog.Write("copy.cleanup.skip route=" + (launchMode ?? "unknown"));
                 return;
             }
 

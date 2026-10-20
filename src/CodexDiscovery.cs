@@ -42,6 +42,10 @@ namespace CodexZhLauncher
             var store = await DetectStorePackageAsync();
             if (store != null) return store;
 
+            // 官网安装版通常只在注册表 Uninstall 里登记，固定路径猜不到。
+            var registry = DetectRegistryInstall();
+            if (registry != null) return registry;
+
             return DetectCommonPortableInstall();
         }
 
@@ -65,7 +69,43 @@ namespace CodexZhLauncher
             var store = await DetectStorePackageAsync();
             if (store != null) return store;
 
+            var registry = DetectRegistryInstall();
+            if (registry != null) return registry;
+
             return DetectCommonPortableInstall();
+        }
+
+        /// <summary>
+        /// 官网安装版：复用补丁引擎的注册表 Uninstall 探测，避免 UI 与引擎
+        /// 对“有没有装 Codex”得出不同结论。
+        /// </summary>
+        private static CodexInstall DetectRegistryInstall()
+        {
+            try
+            {
+                var located = CodexInstallLocator.Find(null);
+                if (located == null) return null;
+                if (String.Equals(located.Kind, "store", StringComparison.OrdinalIgnoreCase))
+                    return null; // 商店包由 DetectStorePackageAsync 负责
+
+                var executable = Path.Combine(located.AppDir, "ChatGPT.exe");
+                if (!File.Exists(executable))
+                    executable = Path.Combine(located.AppDir, "Codex.exe");
+                if (!File.Exists(executable)) return null;
+
+                return new CodexInstall
+                {
+                    Kind = "Portable",
+                    DisplayName = "Codex Desktop",
+                    Version = CodexInstallLocator.GetVersion(located.AppDir),
+                    InstallLocation = located.AppDir,
+                    ExecutablePath = executable
+                };
+            }
+            catch
+            {
+                return null;
+            }
         }
 
         private static CodexInstall DetectLocalizedCopy()

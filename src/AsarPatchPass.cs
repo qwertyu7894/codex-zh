@@ -72,6 +72,24 @@ namespace CodexZhLauncher
                     if (alreadyEntry != null)
                     {
                         Report(progress, "[信息]     已打过补丁，跳过：" + rule.Desc);
+
+                        // 崩溃恢复：数据已经是补丁后的状态，但头部 per-file 哈希可能
+                        // 停在“写了一半”。只读复查无法发现；这里按当前字节重算，
+                        // 不一致就修回去（DryRun 不写）。
+                        if (apply)
+                        {
+                            var patchedNode = AsarArchive.FindEntry(info, alreadyEntry.Path);
+                            if (patchedNode != null)
+                            {
+                                var repaired = AsarPatcher.RepairEntryIntegrity(
+                                    asarPath, info.DataOffset, patchedNode);
+                                if (repaired > 0)
+                                {
+                                    Report(progress, "[警告]     修复了 " + alreadyEntry.Path +
+                                        " 的完整性哈希（" + repaired + " 处）");
+                                }
+                            }
+                        }
                         var ruleResult = new PatchRuleResult
                         {
                             Id = rule.Id, Desc = rule.Desc, Critical = rule.Critical,

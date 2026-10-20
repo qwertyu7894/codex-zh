@@ -57,7 +57,8 @@ namespace CodexZhLauncher
             if (!apply)
             {
                 result.Status = "dry";
-                result.Icon = ResolveIcon(exePath, workDir, iconDir, executablePath);
+                // dry-run 只计算路径，不往 %LOCALAPPDATA% 复制图标。
+                result.Icon = ResolveIcon(exePath, workDir, iconDir, executablePath, false);
                 return result;
             }
 
@@ -67,7 +68,7 @@ namespace CodexZhLauncher
                     progress("快捷方式参数是「" + arguments + "」而不是 --launch-zh —— 指向副本的图标会打开一份英文 Codex。请确认这是你要的。");
             }
 
-            var iconFile = ResolveIcon(exePath, workDir, iconDir, executablePath);
+            var iconFile = ResolveIcon(exePath, workDir, iconDir, executablePath, true);
             result.Icon = iconFile;
 
             var shellType = Type.GetTypeFromProgID("WScript.Shell");
@@ -118,7 +119,8 @@ namespace CodexZhLauncher
         ///   4. 工具自身目录
         /// 找到后复制到稳定路径，避免 WindowsApps 带版本号目录消失后图标变白。
         /// </summary>
-        private static string ResolveIcon(string exePath, string workDir, string iconDir, string executablePath)
+        private static string ResolveIcon(string exePath, string workDir, string iconDir,
+            string executablePath, bool stage)
         {
             var stable = LocalizationPaths.AppIconPath;
             if (!String.IsNullOrWhiteSpace(stable) && File.Exists(stable)) return stable;
@@ -144,6 +146,7 @@ namespace CodexZhLauncher
                 {
                     var candidate = Path.Combine(host, rel);
                     if (!File.Exists(candidate)) continue;
+                    if (!stage) return candidate;
 
                     try
                     {

@@ -12,7 +12,7 @@ namespace CodexZhLauncher
         // ⚠️ 这是版本号的**唯一来源**：Program.cs 的程序集版本、
         //    scripts/package.py 的发布包名都从这里读/对齐。
         //    改版本号只需改这一处，然后同步 Program.cs 的两行程序集版本。
-        public const string Version = "1.4.1";
+        public const string Version = "1.4.2";
         // 指向本分支自己的仓库（二次开发版，不指向上游 shibaweidu/codex-desktop-zh）。
         // 「反馈支持」「GitHub 仓库」两个按钮，以及 UpdateChecker 的 URL 白名单，
         // 全部从 RepositorySlug 派生 —— 仓库改名时只需改这一处。

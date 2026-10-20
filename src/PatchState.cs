@@ -192,7 +192,7 @@ namespace CodexZhLauncher
                     return false;
 
                 var asarPath = Path.Combine(targetApp, "resources", "app.asar");
-                var exePath = Path.Combine(targetApp, "ChatGPT.exe");
+                var exePath = LocalizationPaths.ResolveExecutable(targetApp);
                 if (!File.Exists(asarPath) || !File.Exists(exePath)) return false;
 
                 var asar = new FileInfo(asarPath);

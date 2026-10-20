@@ -9,19 +9,38 @@ namespace CodexZhLauncher
     /// </summary>
     internal static class LocalizationPaths
     {
-        public static string Root
+        private static string UserProfile
         {
             get
             {
-                return Path.Combine(
-                    Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
-                    ".codex", "codex-zh");
+                var profile = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+                if (String.IsNullOrWhiteSpace(profile))
+                    profile = Environment.GetEnvironmentVariable("USERPROFILE");
+                return profile;
             }
+        }
+
+        public static string Root
+        {
+            get { return Path.Combine(UserProfile, ".codex", "codex-zh"); }
         }
 
         public static string AppDir { get { return Path.Combine(Root, "app"); } }
 
-        public static string Executable { get { return Path.Combine(AppDir, "ChatGPT.exe"); } }
+        public static string Executable { get { return ResolveExecutable(AppDir); } }
+
+        /// <summary>
+        /// 商店版/官网版的 exe 名可能是 ChatGPT.exe，也可能是 Codex.exe。
+        /// 所有状态、快路径、启动与完整性检查都必须用同一个解析结果。
+        /// </summary>
+        public static string ResolveExecutable(string appDir)
+        {
+            var chatGpt = Path.Combine(appDir, "ChatGPT.exe");
+            if (File.Exists(chatGpt)) return chatGpt;
+            var codex = Path.Combine(appDir, "Codex.exe");
+            if (File.Exists(codex)) return codex;
+            return chatGpt;
+        }
 
         /// <summary>
         /// 与 Codex 版本无关的稳定图标目录。快捷方式和 AUMID 注册都用这里，
