@@ -440,6 +440,19 @@ namespace CodexZhLauncher
                 // 副本只是磁盘补丁那一版留下的旧快照（它会把汉化钉死在旧版本）。
                 // 回退走磁盘补丁时，LaunchCoordinator 会自己去解析副本。
                 currentInstall = await CodexDiscovery.DetectSourceInstallAsync();
+
+                // 源安装被卸载、只剩本地化副本时，仍然允许用副本继续
+                // （补丁引擎里也有同样的回退；这里让 GUI 入口也能走到它）。
+                if (currentInstall == null)
+                {
+                    var fallback = await CodexDiscovery.DetectAsync();
+                    if (fallback != null && fallback.IsValid)
+                    {
+                        currentInstall = fallback;
+                        AppendLog("未检测到原始安装，使用现有本地化副本继续。", Warning);
+                    }
+                }
+
                 missingPollCount = 0;
                 if (currentInstall != null)
                 {

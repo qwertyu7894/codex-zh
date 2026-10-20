@@ -243,11 +243,19 @@ namespace CodexZhLauncher
 
             Report(request.Progress, String.Empty);
             Report(request.Progress, "[信息] --- 语言设置 ---");
-            var locale = CodexConfigToml.SetLocaleOverride(configToml, request.Locale, request.Apply);
-            if (locale.Changed)
-                Report(request.Progress, "[成功] localeOverride -> " + request.Locale + "（" + locale.Reason + "）");
+            if (outcome.HadError)
+            {
+                // 已经决定中止启动，就不要再动用户的 config.toml。
+                Report(request.Progress, "[信息] 补丁未成功，跳过语言设置（避免修改用户配置）。");
+            }
             else
-                Report(request.Progress, "[信息] localeOverride 已是 " + request.Locale);
+            {
+                var locale = CodexConfigToml.SetLocaleOverride(configToml, request.Locale, request.Apply);
+                if (locale.Changed)
+                    Report(request.Progress, "[成功] localeOverride -> " + request.Locale + "（" + locale.Reason + "）");
+                else
+                    Report(request.Progress, "[信息] localeOverride 已是 " + request.Locale);
+            }
 
             // 失败时不写“可被快路径信任”的 state：否则下一次会 fastSkip 并报成功。
             if (request.Apply && !fastSkip && !outcome.HadError)

@@ -23,9 +23,10 @@ namespace CodexZhLauncher
     /// </summary>
     internal static class EmbeddedAsarIntegrity
     {
-        private static readonly byte[] RecordMarker = Encoding.ASCII.GetBytes("[{\"file\":");
+        // 不带开头的 '['：这样同一个 JSON 数组里的多条记录（{...},{...}）
+        // 也能逐条找到；app.asar.unpacked 会被下面的精确文件名判断排除。
+        private static readonly byte[] RecordMarker = Encoding.ASCII.GetBytes("{\"file\":\"");
         private static readonly byte[] ValueMarker = Encoding.ASCII.GetBytes("\"value\":\"");
-        private static readonly byte[] AsarName = Encoding.ASCII.GetBytes("app.asar");
         private const int MaxRecordSpan = 512;
         private const int HashLength = 64;
 
@@ -80,47 +81,56 @@ namespace CodexZhLauncher
 
                         if (read == window.Length)
                         {
-                            int valueOffset = IndexOfBytes(window, ValueMarker, 0);
-                            if (valueOffset >= 0 && valueOffset <= MaxRecordSpan)
+                            // RecordMarker 已经包含 file 值的开头引号；读到下一个引号，
+                            // 再做精确文件名判断，避免 app.asar.unpacked 误匹配。
+                            int fileEnd = IndexOfByte(window, (byte)'"', RecordMarker.Length);
+                            if (fileEnd > RecordMarker.Length)
                             {
-                                int asarOffset = IndexOfBytes(window, AsarName, 0);
-                                if (asarOffset >= 0 && asarOffset <= valueOffset)
+                                var fileValue = Encoding.ASCII.GetString(
+                                    window, RecordMarker.Length, fileEnd - RecordMarker.Length)
+                                    .Replace("\\\\", "\\");
+                                if (String.Equals(Path.GetFileName(fileValue), "app.asar",
+                                    StringComparison.OrdinalIgnoreCase))
                                 {
-                                    int hashStartInWindow = valueOffset + ValueMarker.Length;
-                                    if (hashStartInWindow + HashLength <= window.Length)
+                                    int valueOffset = IndexOfBytes(window, ValueMarker, fileEnd);
+                                    if (valueOffset >= 0 && valueOffset <= MaxRecordSpan)
                                     {
-                                        var oldHash = Encoding.ASCII.GetString(
-                                            window, hashStartInWindow, HashLength);
-                                        if (IsHex64(oldHash))
+                                        int hashStartInWindow = valueOffset + ValueMarker.Length;
+                                        if (hashStartInWindow + HashLength <= window.Length)
                                         {
-                                            result.File = candidate;
-                                            result.Old = oldHash;
-
-                                            if (String.Equals(oldHash, newHash,
-                                                StringComparison.OrdinalIgnoreCase))
+                                            var oldHash = Encoding.ASCII.GetString(
+                                                window, hashStartInWindow, HashLength);
+                                            if (IsHex64(oldHash))
                                             {
-                                                result.Status = "already-ok";
+                                                result.File = candidate;
+                                                result.Old = oldHash;
+
+                                                if (String.Equals(oldHash, newHash,
+                                                    StringComparison.OrdinalIgnoreCase))
+                                                {
+                                                    result.Status = "already-ok";
+                                                    return result;
+                                                }
+                                                if (!apply)
+                                                {
+                                                    result.Status = "needs-update";
+                                                    return result;
+                                                }
+
+                                                long hashStart = recordPos + hashStartInWindow;
+                                                var newBytes = Encoding.ASCII.GetBytes(newHash);
+                                                using (var fs = new FileStream(candidate, FileMode.Open,
+                                                    FileAccess.ReadWrite, FileShare.Read))
+                                                {
+                                                    fs.Seek(hashStart, SeekOrigin.Begin);
+                                                    fs.Write(newBytes, 0, HashLength);
+                                                    fs.Flush();
+                                                }
+                                                result.Status = "updated";
+                                                result.Old = oldHash;
+                                                result.New = newHash;
                                                 return result;
                                             }
-                                            if (!apply)
-                                            {
-                                                result.Status = "needs-update";
-                                                return result;
-                                            }
-
-                                            long hashStart = recordPos + hashStartInWindow;
-                                            var newBytes = Encoding.ASCII.GetBytes(newHash);
-                                            using (var fs = new FileStream(candidate, FileMode.Open,
-                                                FileAccess.ReadWrite, FileShare.Read))
-                                            {
-                                                fs.Seek(hashStart, SeekOrigin.Begin);
-                                                fs.Write(newBytes, 0, HashLength);
-                                                fs.Flush();
-                                            }
-                                            result.Status = "updated";
-                                            result.Old = oldHash;
-                                            result.New = newHash;
-                                            return result;
                                         }
                                     }
                                 }
@@ -187,6 +197,15 @@ namespace CodexZhLauncher
                     Array.Copy(buffer, available - carry, buffer, 0, carry);
                 absolute += read;
             }
+        }
+
+        private static int IndexOfByte(byte[] haystack, byte needle, int start)
+        {
+            for (int i = start; i < haystack.Length; i++)
+            {
+                if (haystack[i] == needle) return i;
+            }
+            return -1;
         }
 
         private static int IndexOfBytes(byte[] haystack, byte[] needle, int start)
