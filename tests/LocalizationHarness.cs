@@ -551,10 +551,11 @@ namespace CodexZhLauncher
             var workDir = Opt(args, "--workdir", null);
             var name = Opt(args, "--name", "GPT中文汉化");
             var iconDir = Opt(args, "--icon-dir", null);
+            var iconExe = Opt(args, "--icon-exe", null);
             if (String.IsNullOrEmpty(launcher)) throw new ArgumentException("--launcher is required");
             if (String.IsNullOrEmpty(workDir)) workDir = Path.GetDirectoryName(Path.GetFullPath(launcher));
             var result = ShortcutService.Create(Path.GetFullPath(launcher), workDir, name,
-                "--launch-zh", "打开中文版 Codex（运行时注入，跟随最新版）", iconDir, false, null);
+                "--launch-zh", "打开中文版 Codex（运行时注入，跟随最新版）", iconDir, iconExe, false, null);
             KV("status", result.Status);
             KV("icon", result.Icon);
             foreach (var target in result.Targets) KV("target", target);
@@ -567,6 +568,7 @@ namespace CodexZhLauncher
             var workDir = Opt(args, "--workdir", null);
             var name = Opt(args, "--name", "GPT中文汉化-Test");
             var iconDir = Opt(args, "--icon-dir", null);
+            var iconExe = Opt(args, "--icon-exe", null);
             var targetDir = Opt(args, "--target-dir", null);
             if (String.IsNullOrEmpty(launcher)) throw new ArgumentException("--launcher is required");
             if (String.IsNullOrEmpty(targetDir)) throw new ArgumentException("--target-dir is required");
@@ -575,7 +577,7 @@ namespace CodexZhLauncher
 
             var targets = new List<string> { Path.Combine(targetDir, name + ".lnk") };
             var result = ShortcutService.CreateAtTargets(Path.GetFullPath(launcher), workDir, name,
-                "--launch-zh", "打开中文版 Codex（运行时注入，跟随最新版）", iconDir, true,
+                "--launch-zh", "打开中文版 Codex（运行时注入，跟随最新版）", iconDir, iconExe, true,
                 delegate(string message) { Console.Error.WriteLine(message); }, targets);
             KV("status", result.Status);
             KV("icon", result.Icon);

@@ -141,6 +141,7 @@ namespace CodexZhLauncher
 
                 var workDir = Path.GetDirectoryName(launcherPath);
                 var iconDir = install != null ? install.InstallLocation : null;
+                var executablePath = install != null ? install.ExecutablePath : null;
                 var result = await Task.Run(delegate
                 {
                     return ShortcutService.Create(
@@ -150,6 +151,7 @@ namespace CodexZhLauncher
                         "--launch-zh",
                         "打开中文版 Codex（运行时注入，跟随最新版）",
                         iconDir,
+                        executablePath,
                         true,
                         onProgress);
                 });

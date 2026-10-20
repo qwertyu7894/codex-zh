@@ -20,6 +20,7 @@ if (-not (Test-Path -LiteralPath $outDir)) { New-Item -ItemType Directory -Path 
 $sources = @(
     (Join-Path $repoRoot 'tests\LocalizationHarness.cs'),
     (Join-Path $repoRoot 'src\Models.cs'),
+    (Join-Path $repoRoot 'src\LocalizationPaths.cs'),
     (Join-Path $repoRoot 'src\AsarArchive.cs'),
     (Join-Path $repoRoot 'src\AsarPatcher.cs'),
     (Join-Path $repoRoot 'src\AsarPatchPass.cs'),

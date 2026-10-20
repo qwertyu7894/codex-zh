@@ -22,5 +22,21 @@ namespace CodexZhLauncher
         public static string AppDir { get { return Path.Combine(Root, "app"); } }
 
         public static string Executable { get { return Path.Combine(AppDir, "ChatGPT.exe"); } }
+
+        /// <summary>
+        /// 与 Codex 版本无关的稳定图标目录。快捷方式和 AUMID 注册都用这里，
+        /// 避免指向 WindowsApps 里带版本号的目录。
+        /// </summary>
+        public static string IconDirectory
+        {
+            get
+            {
+                return Path.Combine(
+                    Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                    "CodexZhLauncher", "icons");
+            }
+        }
+
+        public static string AppIconPath { get { return Path.Combine(IconDirectory, "codex-app.ico"); } }
     }
 }
