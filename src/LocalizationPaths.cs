@@ -36,10 +36,16 @@ namespace CodexZhLauncher
         public static string ResolveExecutable(string appDir)
         {
             var chatGpt = Path.Combine(appDir, "ChatGPT.exe");
-            if (File.Exists(chatGpt)) return chatGpt;
+            if (IsNonEmptyFile(chatGpt)) return chatGpt;
             var codex = Path.Combine(appDir, "Codex.exe");
-            if (File.Exists(codex)) return codex;
+            if (IsNonEmptyFile(codex)) return codex;
             return chatGpt;
+        }
+
+        private static bool IsNonEmptyFile(string path)
+        {
+            try { return File.Exists(path) && new FileInfo(path).Length > 0; }
+            catch { return false; }
         }
 
         /// <summary>
