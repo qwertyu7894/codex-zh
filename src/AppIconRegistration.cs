@@ -34,7 +34,6 @@ namespace CodexZhLauncher
         private const string AppUserModelId = "com.openai.codex";
 
         private const string DisplayName = "ChatGPT";
-        private const string IconFileName = "codex-app.ico";
 
         private static readonly object Sync = new object();
         private static bool done;
@@ -64,21 +63,9 @@ namespace CodexZhLauncher
         }
 
         /// <summary>图标放哪 —— 必须是与 Codex 版本无关的稳定路径。</summary>
-        internal static string IconDirectory
-        {
-            get
-            {
-                return Path.Combine(
-                    Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-                    "CodexZhLauncher",
-                    "icons");
-            }
-        }
+        internal static string IconDirectory { get { return LocalizationPaths.IconDirectory; } }
 
-        internal static string IconPath
-        {
-            get { return Path.Combine(IconDirectory, IconFileName); }
-        }
+        internal static string IconPath { get { return LocalizationPaths.AppIconPath; } }
 
         /// <summary>
         /// 从安装目录里挑一个高质量 .ico 拷到稳定路径。返回目标路径；找不到源就返回 null。
