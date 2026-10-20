@@ -49,69 +49,87 @@ namespace CodexZhLauncher
             var candidates = GetCandidates(appDir);
             foreach (var candidate in candidates)
             {
-                long recordPos;
-                using (var fs = new FileStream(candidate, FileMode.Open, FileAccess.Read, FileShare.Read))
+                // 一个文件里可能有多条 integrity 记录；app.asar 不一定是第一条。
+                // 逐个查找，直到找到一个合法的 app.asar 记录。
+                long searchStart = 0;
+                while (true)
                 {
-                    recordPos = FindBytes(fs, RecordMarker, 0);
-                }
-                if (recordPos < 0) continue;
-
-                long fileLength = new FileInfo(candidate).Length;
-                int windowLength = (int)Math.Min((long)MaxRecordSpan + 128, fileLength - recordPos);
-                if (windowLength <= 0) continue;
-
-                var window = new byte[windowLength];
-                using (var fs = new FileStream(candidate, FileMode.Open, FileAccess.Read, FileShare.Read))
-                {
-                    fs.Seek(recordPos, SeekOrigin.Begin);
-                    int read = 0;
-                    while (read < window.Length)
+                    long recordPos;
+                    using (var fs = new FileStream(candidate, FileMode.Open, FileAccess.Read, FileShare.Read))
                     {
-                        int n = fs.Read(window, read, window.Length - read);
-                        if (n <= 0) break;
-                        read += n;
+                        recordPos = FindBytes(fs, RecordMarker, searchStart);
                     }
-                    if (read != window.Length) continue;
+                    if (recordPos < 0) break;
+
+                    long fileLength = new FileInfo(candidate).Length;
+                    int windowLength = (int)Math.Min((long)MaxRecordSpan + 128, fileLength - recordPos);
+                    if (windowLength > 0)
+                    {
+                        var window = new byte[windowLength];
+                        int read = 0;
+                        using (var fs = new FileStream(candidate, FileMode.Open, FileAccess.Read, FileShare.Read))
+                        {
+                            fs.Seek(recordPos, SeekOrigin.Begin);
+                            while (read < window.Length)
+                            {
+                                int n = fs.Read(window, read, window.Length - read);
+                                if (n <= 0) break;
+                                read += n;
+                            }
+                        }
+
+                        if (read == window.Length)
+                        {
+                            int valueOffset = IndexOfBytes(window, ValueMarker, 0);
+                            if (valueOffset >= 0 && valueOffset <= MaxRecordSpan)
+                            {
+                                int asarOffset = IndexOfBytes(window, AsarName, 0);
+                                if (asarOffset >= 0 && asarOffset <= valueOffset)
+                                {
+                                    int hashStartInWindow = valueOffset + ValueMarker.Length;
+                                    if (hashStartInWindow + HashLength <= window.Length)
+                                    {
+                                        var oldHash = Encoding.ASCII.GetString(
+                                            window, hashStartInWindow, HashLength);
+                                        if (IsHex64(oldHash))
+                                        {
+                                            result.File = candidate;
+                                            result.Old = oldHash;
+
+                                            if (String.Equals(oldHash, newHash,
+                                                StringComparison.OrdinalIgnoreCase))
+                                            {
+                                                result.Status = "already-ok";
+                                                return result;
+                                            }
+                                            if (!apply)
+                                            {
+                                                result.Status = "needs-update";
+                                                return result;
+                                            }
+
+                                            long hashStart = recordPos + hashStartInWindow;
+                                            var newBytes = Encoding.ASCII.GetBytes(newHash);
+                                            using (var fs = new FileStream(candidate, FileMode.Open,
+                                                FileAccess.ReadWrite, FileShare.Read))
+                                            {
+                                                fs.Seek(hashStart, SeekOrigin.Begin);
+                                                fs.Write(newBytes, 0, HashLength);
+                                                fs.Flush();
+                                            }
+                                            result.Status = "updated";
+                                            result.Old = oldHash;
+                                            result.New = newHash;
+                                            return result;
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    searchStart = recordPos + RecordMarker.Length;
                 }
-
-                int valueOffset = IndexOfBytes(window, ValueMarker, 0);
-                if (valueOffset < 0 || valueOffset > MaxRecordSpan) continue;
-
-                int asarOffset = IndexOfBytes(window, AsarName, 0);
-                if (asarOffset < 0 || asarOffset > valueOffset) continue;
-
-                int hashStartInWindow = valueOffset + ValueMarker.Length;
-                if (hashStartInWindow + HashLength > window.Length) continue;
-
-                var oldHash = Encoding.ASCII.GetString(window, hashStartInWindow, HashLength);
-                if (!IsHex64(oldHash)) continue;
-
-                result.File = candidate;
-                result.Old = oldHash;
-
-                if (String.Equals(oldHash, newHash, StringComparison.OrdinalIgnoreCase))
-                {
-                    result.Status = "already-ok";
-                    return result;
-                }
-                if (!apply)
-                {
-                    result.Status = "needs-update";
-                    return result;
-                }
-
-                long hashStart = recordPos + hashStartInWindow;
-                var newBytes = Encoding.ASCII.GetBytes(newHash);
-                using (var fs = new FileStream(candidate, FileMode.Open, FileAccess.ReadWrite, FileShare.Read))
-                {
-                    fs.Seek(hashStart, SeekOrigin.Begin);
-                    fs.Write(newBytes, 0, HashLength);
-                    fs.Flush();
-                }
-                result.Status = "updated";
-                result.Old = oldHash;
-                result.New = newHash;
-                return result;
             }
 
             result.Status = "not-found";

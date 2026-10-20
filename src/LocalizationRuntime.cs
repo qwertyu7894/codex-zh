@@ -110,7 +110,9 @@ namespace CodexZhLauncher
 
             if (report.Started)
             {
-                report.Message = "汉化完成：中文界面和原生菜单均已生效。";
+                report.Message = String.Equals(locale, "zh-CN", StringComparison.OrdinalIgnoreCase)
+                    ? "汉化完成：中文界面和原生菜单均已生效。"
+                    : "已启动（语言：" + locale + "）。";
             }
             else
             {

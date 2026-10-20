@@ -252,7 +252,12 @@ namespace CodexZhLauncher
                 return true;
 
             if (install.IsStorePackage)
-                return IsWithinDirectory(fullPath, install.InstallLocation);
+            {
+                // 商店在后台升级后，旧版本目录里的进程仍然占着单实例锁；
+                // 只匹配当前版本目录会漏掉它们，导致“点了没反应”。
+                return IsWithinDirectory(fullPath, install.InstallLocation) ||
+                       IsStoreCodexPath(fullPath);
+            }
 
             string root;
             try

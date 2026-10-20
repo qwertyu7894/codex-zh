@@ -110,6 +110,18 @@ namespace CodexZhLauncher
             return result;
         }
 
+        /// <summary>
+        /// 不改数据，只按条目当前字节重算并写回 per-file 完整性哈希。
+        /// 用于 already-patched 分支：如果上次在“数据已写、头部 hash 未写”之间崩溃，
+        /// 重跑时必须能把坏掉的 hash 修回来，否则 App 会一直 FATAL。
+        /// </summary>
+        public static int RepairEntryIntegrity(string asarPath, long dataOffset, AsarNode entry)
+        {
+            if (entry == null || entry.Integrity == null) return 0;
+            var bytes = AsarArchive.ReadEntryBytes(asarPath, dataOffset, entry.Offset, entry.Size);
+            return UpdateEntryIntegrity(asarPath, bytes, entry);
+        }
+
         private static int CountOccurrences(string text, string needle)
         {
             int count = 0;

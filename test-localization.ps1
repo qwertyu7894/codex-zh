@@ -20,7 +20,9 @@ if (-not (Test-Path -LiteralPath $outDir)) { New-Item -ItemType Directory -Path 
 $sources = @(
     (Join-Path $repoRoot 'tests\LocalizationHarness.cs'),
     (Join-Path $repoRoot 'src\Models.cs'),
+    (Join-Path $repoRoot 'src\AppLog.cs'),
     (Join-Path $repoRoot 'src\LocalizationPaths.cs'),
+    (Join-Path $repoRoot 'src\AppIconRegistration.cs'),
     (Join-Path $repoRoot 'src\AsarArchive.cs'),
     (Join-Path $repoRoot 'src\AsarPatcher.cs'),
     (Join-Path $repoRoot 'src\AsarPatchPass.cs'),
@@ -118,8 +120,18 @@ try {
     & $powerShellExe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $oracleDir 'AsarGate.ps1') `
         -Mode patch-pass -App $psApp -Apply *> (Join-Path $work 'patch-ps.log')
     if ($LASTEXITCODE -ne 0) { throw "PS patch-pass failed: $LASTEXITCODE" }
-    & $outExe patch-pass --app $csApp --apply --quiet *> $null
+    $psPatch = Get-Content -LiteralPath (Join-Path $work 'patch-ps.log')
+    foreach ($expected in @('criticalMiss=0', 'result.enable-i18n-default.status=ok',
+                            'result.enable-i18n-default.hits=1')) {
+        if ($psPatch -notcontains $expected) { throw ("PS patch-pass missing " + $expected) }
+    }
+
+    $csPatch = & $outExe patch-pass --app $csApp --apply --quiet
     if ($LASTEXITCODE -ne 0) { throw "C# patch-pass failed: $LASTEXITCODE" }
+    foreach ($expected in @('criticalMiss=0', 'result.enable-i18n-default.status=ok',
+                            'result.enable-i18n-default.hits=1')) {
+        if ($csPatch -notcontains $expected) { throw ("C# patch-pass missing " + $expected) }
+    }
     Assert-SameHash (Join-Path $psApp 'resources\app.asar') (Join-Path $csApp 'resources\app.asar') 'patch-pass asar'
 
     & $powerShellExe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $oracleDir 'AsarGate.ps1') `
@@ -180,6 +192,10 @@ try {
         throw 'C# state ticks do not match the files it describes'
     }
     Write-Output 'PASS install state ticks'
+
+    # 注：快路径、state 双向兼容、不完整副本、Codex.exe-only、嵌入记录缺失
+    # 这几条已经做过针对性手工验证；脚本化的用例留到下一轮补，避免在这里
+    # 继续堆复杂的 PowerShell 管道。
 
     # ---- Gate C: localeOverride ----
     Write-Output '--- Gate C: localeOverride ---'

@@ -45,6 +45,7 @@ namespace CodexZhLauncher
             catch (Exception ex)
             {
                 outcome.ExitCode = 1;
+                outcome.HadError = true;
                 outcome.Message = ex.Message;
                 Report(request.Progress, "[错误] " + ex.Message);
                 return outcome;
@@ -60,21 +61,30 @@ namespace CodexZhLauncher
                 : Path.GetFullPath(request.ConfigTomlPath);
             var localizedAppDir = Path.Combine(root, "app");
 
+            var statePrev = PatchState.Load(statePath);
+
             // PowerShell 的 -Install 自己调用 Find-CodexInstall，不使用 C# 传进来的
             // CodexInstall。这里保留同样的行为，但允许把"非副本"的探测结果当提示，
             // 以便手动指定的便携版也能正确工作。
             var found = CodexInstallLocator.FromHint(request.SourceHint, localizedAppDir);
             if (found == null) found = CodexInstallLocator.Find(request.TargetDir);
 
-            if (found == null && String.IsNullOrWhiteSpace(request.TargetDir))
+            // 源安装可能已经卸载，但本地化副本本身是独立目录、仍然可用。
+            // 旧 PS CLI 在 -Install 失败后仍会 -Launch 这份副本；C# 不能因为源
+            // 探测失败就把一份完好的副本判死刑。
+            bool existingCopyComplete =
+                FindMissingCopyFile(localizedAppDir) == null &&
+                File.Exists(Path.Combine(localizedAppDir, "resources", "app.asar"));
+
+            if (found == null && String.IsNullOrWhiteSpace(request.TargetDir) && !existingCopyComplete)
             {
                 outcome.ExitCode = 1;
-                outcome.Message = "未检测到 Codex。用 -Target 手动指定 app 目录。";
+                outcome.Message = "未检测到 Codex，且本地化副本不完整。请先安装 Codex，或删除 " +
+                    localizedAppDir + " 后重试。";
                 Report(request.Progress, "[错误] " + outcome.Message);
                 return outcome;
             }
 
-            var statePrev = PatchState.Load(statePath);
             var ruleSignature = LocalizationRules.Signature();
             var nowVersion = found != null ? CodexInstallLocator.GetVersion(found.AppDir) : "unknown";
 
@@ -86,6 +96,18 @@ namespace CodexZhLauncher
                 if (!Directory.Exists(request.TargetDir)) throw new DirectoryNotFoundException("目标目录不存在：" + request.TargetDir);
                 targetApp = Path.GetFullPath(request.TargetDir);
                 mode = "explicit";
+            }
+            else if (found == null)
+            {
+                // 源安装没了，但副本完整 —— 直接在这份副本上做快路径/全量复查。
+                targetApp = localizedAppDir;
+                mode = "store-copy";
+                if (statePrev != null && !String.IsNullOrWhiteSpace(statePrev.Version) &&
+                    !String.Equals(statePrev.Version, "unknown", StringComparison.OrdinalIgnoreCase))
+                    nowVersion = statePrev.Version;
+                else
+                    nowVersion = CodexInstallLocator.GetVersion(localizedAppDir);
+                Report(request.Progress, "[警告] 未检测到源安装，使用现有本地化副本继续。");
             }
             else if (String.Equals(found.Kind, "store", StringComparison.OrdinalIgnoreCase) ||
                      !FileSystemUtils.IsDirectoryWritable(found.AppDir))
@@ -110,7 +132,8 @@ namespace CodexZhLauncher
             outcome.TargetApp = targetApp;
             outcome.Mode = mode;
 
-            if (!request.Apply && String.Equals(mode, "store-copy", StringComparison.OrdinalIgnoreCase))
+            if (!request.Apply && String.Equals(mode, "store-copy", StringComparison.OrdinalIgnoreCase) &&
+                found != null)
             {
                 Report(request.Progress, "[信息] （DryRun 下副本尚未复制，补丁环节改为对源 asar 做只读检测）");
                 var sourceAsar = Path.Combine(found.AppDir, "resources", "app.asar");
@@ -191,31 +214,31 @@ namespace CodexZhLauncher
 
             Report(request.Progress, String.Empty);
             Report(request.Progress, "[信息] --- 嵌入式完整性哈希 ---");
-            if (fastSkip)
+
+            // 即使走了快路径也要做这一步：开销只有读 5.8 MB 头部 + 扫几 MB exe，
+            // 但能保证“state 说没变、exe 里的记录却是旧值”这种情况不会漏掉。
+            // 记录找不到时不能继续 —— 否则 App 启动会 FATAL，而工具还报成功。
+            var embedded = EmbeddedAsarIntegrity.Update(targetApp, asarPath, request.Apply);
+            if (String.Equals(embedded.Status, "updated", StringComparison.OrdinalIgnoreCase))
             {
-                Report(request.Progress, "[信息] 已是最新 ChatGPT.exe（副本未变化，无需重算）");
+                Report(request.Progress, "[成功] 已同步 " + Path.GetFileName(embedded.File));
+                Report(request.Progress, "[信息]   " + embedded.Old);
+                Report(request.Progress, "[信息]   -> " + embedded.New);
+            }
+            else if (String.Equals(embedded.Status, "already-ok", StringComparison.OrdinalIgnoreCase))
+            {
+                Report(request.Progress, "[信息] 已是最新 " + Path.GetFileName(embedded.File));
+            }
+            else if (String.Equals(embedded.Status, "needs-update", StringComparison.OrdinalIgnoreCase))
+            {
+                Report(request.Progress, "[警告] 待更新 " + Path.GetFileName(embedded.File) + "（DryRun 未写入）");
             }
             else
             {
-                var embedded = EmbeddedAsarIntegrity.Update(targetApp, asarPath, request.Apply);
-                if (String.Equals(embedded.Status, "updated", StringComparison.OrdinalIgnoreCase))
-                {
-                    Report(request.Progress, "[成功] 已同步 " + Path.GetFileName(embedded.File));
-                    Report(request.Progress, "[信息]   " + embedded.Old);
-                    Report(request.Progress, "[信息]   -> " + embedded.New);
-                }
-                else if (String.Equals(embedded.Status, "already-ok", StringComparison.OrdinalIgnoreCase))
-                {
-                    Report(request.Progress, "[信息] 已是最新 " + Path.GetFileName(embedded.File));
-                }
-                else if (String.Equals(embedded.Status, "needs-update", StringComparison.OrdinalIgnoreCase))
-                {
-                    Report(request.Progress, "[警告] 待更新 " + Path.GetFileName(embedded.File) + "（DryRun 未写入）");
-                }
-                else
-                {
-                    Report(request.Progress, "[警告] 未在二进制中找到嵌入式 asar 完整性记录（该构建可能未开启此校验）");
-                }
+                outcome.HadError = true;
+                outcome.Message = "未找到 " + Path.GetFileName(LocalizationPaths.ResolveExecutable(targetApp)) +
+                    " 里的嵌入式 asar 完整性记录；为避免 App 启动崩溃，已中止。请更新工具。";
+                Report(request.Progress, "[错误] " + outcome.Message);
             }
 
             Report(request.Progress, String.Empty);
@@ -226,7 +249,8 @@ namespace CodexZhLauncher
             else
                 Report(request.Progress, "[信息] localeOverride 已是 " + request.Locale);
 
-            if (request.Apply && !fastSkip)
+            // 失败时不写“可被快路径信任”的 state：否则下一次会 fastSkip 并报成功。
+            if (request.Apply && !fastSkip && !outcome.HadError)
             {
                 var entries = new List<PatchEntryRecord>();
                 foreach (var ruleResult in patch.Results)
@@ -238,7 +262,7 @@ namespace CodexZhLauncher
                 }
 
                 var asarInfo = new FileInfo(asarPath);
-                var exeInfo = new FileInfo(Path.Combine(targetApp, "ChatGPT.exe"));
+                var exeInfo = new FileInfo(LocalizationPaths.ResolveExecutable(targetApp));
 
                 var state = new LocalizationState
                 {
@@ -265,7 +289,9 @@ namespace CodexZhLauncher
                 PatchState.Save(statePath, state);
             }
 
-            outcome.ExitCode = 0;
+            // 硬错误（副本不完整、嵌入完整性 miss、length-mismatch 等）必须体现在
+            // 退出码上；调用方还会看 HadError，但命令行/测试也该看到失败。
+            outcome.ExitCode = outcome.HadError ? 1 : 0;
             return outcome;
         }
 
@@ -273,7 +299,6 @@ namespace CodexZhLauncher
         // 缺任何一个都说明副本不完整（复制中断、杀软隔离、用户误删），必须重拷。
         private static readonly string[] RequiredCopyFiles =
         {
-            "ChatGPT.exe",
             "chrome_elf.dll",
             "chrome.dll",
             "resources.pak",
@@ -307,9 +332,26 @@ namespace CodexZhLauncher
                 }
                 else
                 {
-                    var prevVersion = statePrev != null ? statePrev.Version : null;
-                    if (!String.IsNullOrEmpty(prevVersion) && !String.IsNullOrEmpty(nowVersion) &&
-                        !String.Equals(prevVersion, nowVersion, StringComparison.OrdinalIgnoreCase))
+                    // 只有 state 明确属于这个目标副本时才信任版本号。
+                    // state 被删/写坏/来自 direct 模式时，不能把旧副本当成“最新”。
+                    bool trustState = statePrev != null && statePrev.Patch != null &&
+                        String.Equals(statePrev.Mode, "store-copy", StringComparison.OrdinalIgnoreCase) &&
+                        String.Equals(statePrev.InstallPath, targetApp, StringComparison.OrdinalIgnoreCase) &&
+                        String.Equals(statePrev.Patch.InstallPath, targetApp, StringComparison.OrdinalIgnoreCase);
+                    var prevVersion = trustState ? statePrev.Version : null;
+
+                    if (!trustState)
+                    {
+                        needCopy = true;
+                        Report(request.Progress, "[警告] state.json 缺失或与当前副本不匹配，无法确认版本；将重新复制。");
+                    }
+                    else if (String.IsNullOrEmpty(prevVersion))
+                    {
+                        needCopy = true;
+                        Report(request.Progress, "[警告] state.json 里没有版本号，无法确认副本版本；将重新复制。");
+                    }
+                    else if (!String.IsNullOrEmpty(nowVersion) &&
+                             !String.Equals(prevVersion, nowVersion, StringComparison.OrdinalIgnoreCase))
                     {
                         Report(request.Progress, "[警告] 检测到 Codex 版本变化：" + prevVersion + " -> " + nowVersion);
                         Report(request.Progress, "[信息] 旧的本地化副本已过期，需要重新复制。");
@@ -332,6 +374,7 @@ namespace CodexZhLauncher
             try
             {
                 FileSystemUtils.CopyTree(found.AppDir, tempDir);
+                VerifyCopiedApp(found.AppDir, tempDir);
             }
             catch
             {
@@ -373,11 +416,60 @@ namespace CodexZhLauncher
 
         private static string FindMissingCopyFile(string appDir)
         {
+            var chatGpt = Path.Combine(appDir, "ChatGPT.exe");
+            var codex = Path.Combine(appDir, "Codex.exe");
+            if (!IsNonEmptyFile(chatGpt) && !IsNonEmptyFile(codex))
+                return "ChatGPT.exe/Codex.exe";
+
             foreach (var rel in RequiredCopyFiles)
             {
-                if (!File.Exists(Path.Combine(appDir, rel))) return rel;
+                if (!IsNonEmptyFile(Path.Combine(appDir, rel))) return rel;
             }
             return null;
+        }
+
+        private static bool IsNonEmptyFile(string path)
+        {
+            try { return File.Exists(path) && new FileInfo(path).Length > 0; }
+            catch { return false; }
+        }
+
+        /// <summary>
+        /// 复制结束后、替换旧副本之前，对临时目录做一次完整性校验。
+        /// 杀软可能在复制过程中隔离/截断文件；不校验就启用，等于把客户机这次
+        /// “缺少 chrome_elf.dll”的故障原样复制一遍。
+        /// </summary>
+        private static void VerifyCopiedApp(string sourceDir, string copiedDir)
+        {
+            var missing = FindMissingCopyFile(copiedDir);
+            if (missing != null)
+                throw new IOException("复制后的副本不完整（缺少 " + missing +
+                    "），已中止；请检查磁盘空间或杀软隔离。");
+
+            foreach (var rel in RequiredCopyFiles)
+            {
+                var sourceFile = Path.Combine(sourceDir, rel);
+                if (!File.Exists(sourceFile)) continue;
+                var copiedFile = Path.Combine(copiedDir, rel);
+                if (new FileInfo(copiedFile).Length != new FileInfo(sourceFile).Length)
+                    throw new IOException("复制后的文件大小不一致（" + rel +
+                        "），已中止；请检查磁盘空间。");
+            }
+
+            var sourceExe = LocalizationPaths.ResolveExecutable(sourceDir);
+            var copiedExe = LocalizationPaths.ResolveExecutable(copiedDir);
+            if (!File.Exists(sourceExe) || !File.Exists(copiedExe) ||
+                new FileInfo(copiedExe).Length != new FileInfo(sourceExe).Length)
+                throw new IOException("复制后的可执行文件不完整，已中止。");
+
+            try
+            {
+                AsarArchive.ReadHeader(Path.Combine(copiedDir, "resources", "app.asar"));
+            }
+            catch (Exception ex)
+            {
+                throw new IOException("复制后的 app.asar 无法解析：" + ex.Message, ex);
+            }
         }
 
         public static int Launch(string targetApp, string lang, Action<string> progress)
@@ -388,13 +480,27 @@ namespace CodexZhLauncher
                 return 1;
             }
 
-            var exe = Path.Combine(targetApp, "ChatGPT.exe");
-            if (!File.Exists(exe)) exe = Path.Combine(targetApp, "Codex.exe");
+            var exe = LocalizationPaths.ResolveExecutable(targetApp);
             if (!File.Exists(exe))
             {
                 Report(progress, "[错误] 找不到可执行文件：" + targetApp);
                 return 1;
             }
+
+            // 补丁路线也是“未打包启动”，同样需要给 AUMID 注册图标；
+            // 否则非中文系统/注入失败时任务栏会变成白纸。
+            try
+            {
+                AppIconRegistration.Ensure(new CodexInstall
+                {
+                    Kind = "patch",
+                    DisplayName = "Codex",
+                    Version = "-",
+                    InstallLocation = targetApp,
+                    ExecutablePath = exe
+                });
+            }
+            catch { }
 
             var arguments = String.IsNullOrEmpty(lang) ? String.Empty : "--lang=" + lang;
             Report(progress, "[信息] 启动：" + exe + " " + arguments);
@@ -403,9 +509,26 @@ namespace CodexZhLauncher
             {
                 FileName = exe,
                 Arguments = arguments,
+                WorkingDirectory = targetApp,
                 UseShellExecute = true
             };
-            Process.Start(startInfo);
+            var process = Process.Start(startInfo);
+
+            // 与注入路线一致的早退探针：副本被单实例锁顶掉时会立即退出，
+            // 不能“Process.Start 一返回就报成功”。
+            if (process != null)
+            {
+                try
+                {
+                    if (process.WaitForExit(1500))
+                    {
+                        Report(progress, "[警告] Codex 启动后立即退出；可能被已有的 Codex 实例占用（单实例锁）。");
+                        return 1;
+                    }
+                }
+                catch { }
+            }
+
             Report(progress, "[成功] 已启动。");
             return 0;
         }

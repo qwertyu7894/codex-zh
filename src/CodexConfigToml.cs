@@ -27,9 +27,14 @@ namespace CodexZhLauncher
     /// </summary>
     internal static class CodexConfigToml
     {
-        private static readonly Regex DesktopSection = new Regex(@"^\s*\[desktop\]\s*$");
-        private static readonly Regex AnySection = new Regex(@"^\s*\[");
-        private static readonly Regex LocaleKey = new Regex(@"^\s*localeOverride\s*=");
+        // PowerShell 的 -match 默认不区分大小写；这里必须显式 IgnoreCase，
+        // 否则 [Desktop] / LocaleOverride= 会被当成不存在并追加重复段。
+        private static readonly Regex DesktopSection = new Regex(
+            @"^\s*\[desktop\]\s*$", RegexOptions.IgnoreCase);
+        private static readonly Regex AnySection = new Regex(
+            @"^\s*\[", RegexOptions.IgnoreCase);
+        private static readonly Regex LocaleKey = new Regex(
+            @"^\s*localeOverride\s*=", RegexOptions.IgnoreCase);
 
         public static LocaleOverrideResult SetLocaleOverride(string path, string locale, bool apply)
         {
@@ -106,7 +111,45 @@ namespace CodexZhLauncher
             var dir = Path.GetDirectoryName(path);
             if (!String.IsNullOrEmpty(dir) && !Directory.Exists(dir))
                 Directory.CreateDirectory(dir);
-            File.WriteAllLines(path, lines.ToArray(), new UTF8Encoding(false));
+
+            // 不要直接截断重写用户的 config.toml：里面还有 provider / MCP / 登录
+            // 相关配置。先写临时文件，再用 File.Replace 原子替换，并保留 .bak。
+            var temp = path + ".tmp-" + Guid.NewGuid().ToString("N");
+            var backup = path + ".bak";
+            try
+            {
+                File.WriteAllLines(temp, lines.ToArray(), new UTF8Encoding(false));
+
+                if (!File.Exists(path))
+                {
+                    File.Move(temp, path);
+                    return;
+                }
+
+                for (int attempt = 0; attempt < 3; attempt++)
+                {
+                    try
+                    {
+                        // ReplaceFile 会覆盖已有的 .bak（备份的是替换前的旧文件）。
+                        File.Replace(temp, path, backup, true);
+                        return;
+                    }
+                    catch (IOException)
+                    {
+                        if (attempt == 2) throw;
+                        System.Threading.Thread.Sleep(100);
+                    }
+                    catch (UnauthorizedAccessException)
+                    {
+                        if (attempt == 2) throw;
+                        System.Threading.Thread.Sleep(100);
+                    }
+                }
+            }
+            finally
+            {
+                try { if (File.Exists(temp)) File.Delete(temp); } catch { }
+            }
         }
     }
 }
