@@ -14,3 +14,15 @@ Thumbs.db
 macos/.build/
 macos/.swiftpm/
 macos/.artifacts/
+
+# 凭据与密钥：防止误提交
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.pfx
+*.p12
+credentials*
+secrets*
+auth.json
