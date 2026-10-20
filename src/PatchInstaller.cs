@@ -269,6 +269,20 @@ namespace CodexZhLauncher
             return outcome;
         }
 
+        // 启动本地化副本所需的 Chromium / Electron 关键文件。
+        // 缺任何一个都说明副本不完整（复制中断、杀软隔离、用户误删），必须重拷。
+        private static readonly string[] RequiredCopyFiles =
+        {
+            "ChatGPT.exe",
+            "chrome_elf.dll",
+            "chrome.dll",
+            "resources.pak",
+            "icudtl.dat",
+            "v8_context_snapshot.bin",
+            "snapshot_blob.bin",
+            Path.Combine("resources", "app.asar")
+        };
+
         private static void HandleStoreCopy(InstallRequest request, DiscoveredInstall found,
             string targetApp, LocalizationState statePrev, string nowVersion)
         {
@@ -282,41 +296,88 @@ namespace CodexZhLauncher
             }
             else
             {
-                var prevVersion = statePrev != null ? statePrev.Version : null;
-                if (!String.IsNullOrEmpty(prevVersion) && !String.IsNullOrEmpty(nowVersion) &&
-                    !String.Equals(prevVersion, nowVersion, StringComparison.OrdinalIgnoreCase))
+                var missing = FindMissingCopyFile(targetApp);
+                if (missing != null)
                 {
-                    Report(request.Progress, "[警告] 检测到 Codex 版本变化：" + prevVersion + " -> " + nowVersion);
-                    Report(request.Progress, "[信息] 旧的本地化副本已过期，需要重新复制。");
+                    // 旧副本可能是上次复制中断留下的半成品（客户机真实案例：
+                    // chrome_elf.dll 缺失 -> ChatGPT.exe 启动时报“找不到模块”）。
+                    // 只要关键文件不齐就强制重拷，不能因为它“看起来存在”而跳过。
                     needCopy = true;
+                    Report(request.Progress, "[警告] 本地化副本不完整（缺少 " + missing + "），需要重新复制。");
                 }
                 else
                 {
-                    Report(request.Progress, "[信息] 副本已是最新（" + nowVersion + "），跳过复制。");
+                    var prevVersion = statePrev != null ? statePrev.Version : null;
+                    if (!String.IsNullOrEmpty(prevVersion) && !String.IsNullOrEmpty(nowVersion) &&
+                        !String.Equals(prevVersion, nowVersion, StringComparison.OrdinalIgnoreCase))
+                    {
+                        Report(request.Progress, "[警告] 检测到 Codex 版本变化：" + prevVersion + " -> " + nowVersion);
+                        Report(request.Progress, "[信息] 旧的本地化副本已过期，需要重新复制。");
+                        needCopy = true;
+                    }
+                    else
+                    {
+                        Report(request.Progress, "[信息] 副本已是最新（" + nowVersion + "），跳过复制。");
+                    }
                 }
             }
 
             if (!needCopy) return;
 
+            // 先复制到临时目录，成功后再替换旧副本。
+            // 这样即使复制中途失败/被杀软打断，也不会留下一个“半成品 app”被下次误用。
+            var tempDir = targetApp + ".copying-" + Guid.NewGuid().ToString("N");
+            Report(request.Progress, "[信息] 复制 Codex 到临时目录（约 1-2 GB，可能需要一会）...");
+            var stopwatch = Stopwatch.StartNew();
+            try
+            {
+                FileSystemUtils.CopyTree(found.AppDir, tempDir);
+            }
+            catch
+            {
+                try { if (Directory.Exists(tempDir)) FileSystemUtils.DeleteTreeForce(tempDir); }
+                catch { }
+                throw;
+            }
+            stopwatch.Stop();
+
             if (Directory.Exists(targetApp))
             {
-                Report(request.Progress, "[信息] 清理旧副本…");
+                Report(request.Progress, "[信息] 替换旧的本地化副本…");
                 try
                 {
                     FileSystemUtils.DeleteTreeForce(targetApp);
                 }
                 catch (Exception ex)
                 {
+                    try { if (Directory.Exists(tempDir)) FileSystemUtils.DeleteTreeForce(tempDir); }
+                    catch { }
                     throw new IOException("无法删除旧副本：" + ex.Message + "。请确认 Codex 已完全退出后重试。", ex);
                 }
             }
 
-            Report(request.Progress, "[信息] 复制 Codex 到 " + targetApp + "（约 1-2 GB，可能需要一会）...");
-            var stopwatch = Stopwatch.StartNew();
-            FileSystemUtils.CopyTree(found.AppDir, targetApp);
-            stopwatch.Stop();
+            try
+            {
+                Directory.Move(tempDir, targetApp);
+            }
+            catch (Exception ex)
+            {
+                try { if (Directory.Exists(tempDir)) FileSystemUtils.DeleteTreeForce(tempDir); }
+                catch { }
+                throw new IOException("无法启用新副本：" + ex.Message + "。请确认 Codex 已完全退出后重试。", ex);
+            }
+
             Report(request.Progress, "[成功] 复制完成，耗时 " +
                 String.Format(CultureInfo.CurrentCulture, "{0:N0}", stopwatch.Elapsed.TotalSeconds) + " 秒");
+        }
+
+        private static string FindMissingCopyFile(string appDir)
+        {
+            foreach (var rel in RequiredCopyFiles)
+            {
+                if (!File.Exists(Path.Combine(appDir, rel))) return rel;
+            }
+            return null;
         }
 
         public static int Launch(string targetApp, string lang, Action<string> progress)
