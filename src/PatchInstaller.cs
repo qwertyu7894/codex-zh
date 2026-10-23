@@ -47,6 +47,7 @@ namespace CodexZhLauncher
                 outcome.ExitCode = 1;
                 outcome.HadError = true;
                 outcome.Message = ex.Message;
+                AppLog.Write("patch.install.exception " + ex.GetType().Name + ": " + ex.Message);
                 Report(request.Progress, "[错误] " + ex.Message);
                 return outcome;
             }
