@@ -214,21 +214,20 @@ namespace CodexZhLauncher
         }
 
         /// <summary>
-        /// 把 [错误]/[警告] 同时写进 launcher.log。
+        /// 把补丁环节的每一步都写进 launcher.log。
         /// 原先这些只在界面里滚动显示，客户机把日志发回来时看不到失败原因
-        /// （真实案例：1.4.2 在 26.1016 上第一次启动报错，日志里只有
-        /// 一行 "patch.install.error"，没有任何细节）。
+        /// （真实案例：1.4.2 在 26.1027 上失败，日志里只有一行
+        /// "patch.install.error"，不知道卡在复制、补丁还是嵌入哈希哪一步）。
+        ///
+        /// 只记"非空、且不是纯分隔线"的行：进度里空串是用来分段的，
+        /// 全记下来会把日志撑得很碎。
         /// </summary>
         private static Action<string> LogProgress(Action<string> onProgress)
         {
             return delegate(string message)
             {
-                if (!String.IsNullOrEmpty(message) &&
-                    (message.StartsWith("[错误]", StringComparison.Ordinal) ||
-                     message.StartsWith("[警告]", StringComparison.Ordinal)))
-                {
+                if (!String.IsNullOrEmpty(message))
                     AppLog.Write("patch.progress " + message);
-                }
                 if (onProgress != null)
                 {
                     try { onProgress(message); }

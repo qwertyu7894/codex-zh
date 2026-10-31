@@ -1,10 +1,109 @@
 using System;
+using System.ComponentModel;
 using System.IO;
+using System.Runtime.InteropServices;
+using Microsoft.Win32.SafeHandles;
 
 namespace CodexZhLauncher
 {
+    /// <summary>
+    /// 目录操作工具。
+    ///
+    /// 这里刻意**不走 System.IO 的递归 API**，而是直接调 Win32：
+    /// Codex 26.1016 起 app 里多了
+    /// <c>resources\cua_node\bin\node_modules\@oai\...\leveldb\...</c> 这类深层目录，
+    /// 单条相对路径就有 168 个字符。加上 <c>%USERPROFILE%\.codex\codex-zh\app</c>
+    /// 或 <c>C:\Program Files\WindowsApps\OpenAI.Codex_&lt;版本&gt;_x64__...</c> 前缀，
+    /// 轻松超过 260 字符的 MAX_PATH —— 客户机真实案例（2026-10-31，26.1027）：
+    /// 补丁跑 5 秒后直接失败，报"指定的路径或文件名太长"。
+    ///
+    /// 只加 <c>\\?\</c> 前缀不够：本项目用 legacy csc 编译、没有 app.config，
+    /// .NET Framework 走的是旧路径处理，<c>\\?\</c> 会被判成"非法字符"。
+    /// 所以文件/目录的枚举、创建、读写、删除全部落到 Win32 API 上，
+    /// 由扩展长度前缀把上限抬到 32767。
+    /// </summary>
     internal static class FileSystemUtils
     {
+        private const uint GENERIC_READ = 0x80000000;
+        private const uint GENERIC_WRITE = 0x40000000;
+        private const uint FILE_SHARE_READ = 0x00000001;
+        private const uint OPEN_EXISTING = 3;
+        private const uint CREATE_ALWAYS = 2;
+        private const uint FILE_ATTRIBUTE_NORMAL = 0x80;
+        private const uint FILE_ATTRIBUTE_DIRECTORY = 0x10;
+
+        private static readonly IntPtr InvalidHandle = new IntPtr(-1);
+
+        [StructLayout(LayoutKind.Sequential)]
+        private struct FileTime
+        {
+            public uint Low;
+            public uint High;
+        }
+
+        [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+        private struct Win32FindData
+        {
+            public uint FileAttributes;
+            public FileTime CreationTime;
+            public FileTime LastAccessTime;
+            public FileTime LastWriteTime;
+            public uint FileSizeHigh;
+            public uint FileSizeLow;
+            public uint Reserved0;
+            public uint Reserved1;
+            [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 260)]
+            public string FileName;
+            [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 14)]
+            public string AlternateFileName;
+        }
+
+        [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+        private static extern IntPtr FindFirstFileW(string pattern, out Win32FindData data);
+
+        [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+        private static extern bool FindNextFileW(IntPtr handle, out Win32FindData data);
+
+        [DllImport("kernel32.dll", SetLastError = true)]
+        private static extern bool FindClose(IntPtr handle);
+
+        [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+        private static extern IntPtr CreateFileW(string name, uint access, uint share, IntPtr security,
+            uint disposition, uint attributes, IntPtr template);
+
+        [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+        private static extern bool CreateDirectoryW(string path, IntPtr security);
+
+        [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+        private static extern bool DeleteFileW(string path);
+
+        [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+        private static extern bool RemoveDirectoryW(string path);
+
+        [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+        private static extern uint GetFileAttributesW(string path);
+
+        [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+        private static extern bool SetFileAttributesW(string path, uint attributes);
+
+        private const uint INVALID_FILE_ATTRIBUTES = 0xFFFFFFFF;
+
+        /// <summary>
+        /// 转成 Win32 的扩展长度路径（<c>\\?\C:\...</c>）。
+        /// 扩展前缀要求绝对路径、只用反斜杠、不能含 <c>.</c>/<c>..</c> 段 ——
+        /// 本类拼出来的路径都满足。
+        /// </summary>
+        public static string ExtendedPath(string path)
+        {
+            if (String.IsNullOrEmpty(path)) return path;
+            if (path.StartsWith(@"\\?\", StringComparison.Ordinal)) return path;
+
+            var full = Path.IsPathRooted(path) ? path : Path.GetFullPath(path);
+            if (full.StartsWith(@"\\", StringComparison.Ordinal))
+                return @"\\?\UNC\" + full.Substring(2);
+            return @"\\?\" + full;
+        }
+
         public static bool IsDirectoryWritable(string dir)
         {
             try
@@ -21,31 +120,54 @@ namespace CodexZhLauncher
         }
 
         /// <summary>
-        /// 逐字节递归复制。不用 CopyFile：WindowsApps 里有重解析点/EFS，
-        /// 走字节流最稳。不保留 ACL / 属性 / 时间戳（与 PowerShell 实现一致）。
+        /// 逐字节递归复制。不保留 ACL / 属性 / 时间戳（与 PowerShell 实现一致），
+        /// 不跟随重解析点进死循环以外的特殊处理 —— WindowsApps 里的目录都是普通目录。
         /// </summary>
         public static void CopyTree(string source, string destination)
         {
-            if (!Directory.Exists(destination)) Directory.CreateDirectory(destination);
+            CopyTreeCore(ToExtended(source), ToExtended(destination));
+        }
 
-            foreach (var dir in Directory.EnumerateDirectories(source))
+        private static void CopyTreeCore(string source, string destination)
+        {
+            if (!CreateDirectoryW(destination, IntPtr.Zero))
             {
-                CopyTree(dir, Path.Combine(destination, Path.GetFileName(dir)));
+                int error = Marshal.GetLastWin32Error();
+                // 目录已存在时 CreateDirectory 会返回 ERROR_ALREADY_EXISTS，属正常。
+                if (error != 183)
+                    throw new IOException("无法创建目录：" + destination + "（" +
+                        new Win32Exception(error).Message + "）");
             }
 
             var buffer = new byte[8 * 1024 * 1024];
-            foreach (var file in Directory.EnumerateFiles(source))
+            foreach (var entry in Enumerate(source))
             {
-                var target = Path.Combine(destination, Path.GetFileName(file));
-                using (var input = new FileStream(file, FileMode.Open, FileAccess.Read, FileShare.Read))
-                using (var output = new FileStream(target, FileMode.Create, FileAccess.Write, FileShare.None))
+                var sourceChild = source + @"\" + entry.Name;
+                var targetChild = destination + @"\" + entry.Name;
+
+                if ((entry.Attributes & FILE_ATTRIBUTE_DIRECTORY) != 0)
                 {
-                    while (true)
+                    CopyTreeCore(sourceChild, targetChild);
+                    continue;
+                }
+
+                try
+                {
+                    using (var input = OpenRead(sourceChild))
+                    using (var output = OpenCreate(targetChild))
                     {
-                        int read = input.Read(buffer, 0, buffer.Length);
-                        if (read <= 0) break;
-                        output.Write(buffer, 0, read);
+                        while (true)
+                        {
+                            int read = input.Read(buffer, 0, buffer.Length);
+                            if (read <= 0) break;
+                            output.Write(buffer, 0, read);
+                        }
                     }
+                }
+                catch (Exception ex)
+                {
+                    throw new IOException("复制失败：" + sourceChild + " -> " + targetChild +
+                        "（" + ex.Message + "）", ex);
                 }
             }
         }
@@ -53,34 +175,102 @@ namespace CodexZhLauncher
         /// <summary>等价于 Remove-Item -Recurse -Force：先清只读属性再删。</summary>
         public static void DeleteTreeForce(string path)
         {
-            if (!Directory.Exists(path)) return;
-            ClearReadOnly(path);
-            Directory.Delete(path, true);
+            var extended = ToExtended(path);
+            if (GetFileAttributesW(extended) == INVALID_FILE_ATTRIBUTES) return;
+            DeleteTreeCore(extended);
         }
 
-        private static void ClearReadOnly(string dir)
+        private static void DeleteTreeCore(string directory)
         {
-            foreach (var file in Directory.EnumerateFiles(dir))
+            foreach (var entry in Enumerate(directory))
             {
-                try
+                var child = directory + @"\" + entry.Name;
+                // 只读属性会让 DeleteFile/RemoveDirectory 直接失败，先清掉。
+                SetFileAttributesW(child, FILE_ATTRIBUTE_NORMAL);
+                if ((entry.Attributes & FILE_ATTRIBUTE_DIRECTORY) != 0)
                 {
-                    var attributes = File.GetAttributes(file);
-                    if ((attributes & FileAttributes.ReadOnly) != 0)
-                        File.SetAttributes(file, attributes & ~FileAttributes.ReadOnly);
+                    DeleteTreeCore(child);
+                    continue;
                 }
-                catch { }
+                if (!DeleteFileW(child))
+                {
+                    int error = Marshal.GetLastWin32Error();
+                    throw new IOException("删除失败：" + child + "（" +
+                        new Win32Exception(error).Message + "）");
+                }
             }
-            foreach (var sub in Directory.EnumerateDirectories(dir))
+
+            if (!RemoveDirectoryW(directory))
             {
-                ClearReadOnly(sub);
-                try
-                {
-                    var attributes = File.GetAttributes(sub);
-                    if ((attributes & FileAttributes.ReadOnly) != 0)
-                        File.SetAttributes(sub, attributes & ~FileAttributes.ReadOnly);
-                }
-                catch { }
+                int error = Marshal.GetLastWin32Error();
+                throw new IOException("删除目录失败：" + directory + "（" +
+                    new Win32Exception(error).Message + "）");
             }
+        }
+
+        private static string ToExtended(string path)
+        {
+            var full = Path.IsPathRooted(path) ? path : Path.GetFullPath(path);
+            return ExtendedPath(full);
+        }
+
+        private sealed class Entry
+        {
+            public string Name;
+            public uint Attributes;
+        }
+
+        /// <summary>列出目录下的条目（不含 <c>.</c> / <c>..</c>）。</summary>
+        private static System.Collections.Generic.List<Entry> Enumerate(string extendedDirectory)
+        {
+            var result = new System.Collections.Generic.List<Entry>();
+            Win32FindData data;
+            var handle = FindFirstFileW(extendedDirectory + @"\*", out data);
+            if (handle == InvalidHandle)
+            {
+                int error = Marshal.GetLastWin32Error();
+                if (error == 2 || error == 3) return result; // 不存在
+                throw new IOException("无法枚举目录：" + extendedDirectory + "（" +
+                    new Win32Exception(error).Message + "）");
+            }
+
+            try
+            {
+                do
+                {
+                    if (data.FileName == "." || data.FileName == "..") continue;
+                    var entry = new Entry();
+                    entry.Name = data.FileName;
+                    entry.Attributes = data.FileAttributes;
+                    result.Add(entry);
+                }
+                while (FindNextFileW(handle, out data));
+            }
+            finally
+            {
+                FindClose(handle);
+            }
+            return result;
+        }
+
+        private static FileStream OpenRead(string path)
+        {
+            var handle = CreateFileW(path, GENERIC_READ, FILE_SHARE_READ, IntPtr.Zero,
+                OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, IntPtr.Zero);
+            if (handle == InvalidHandle)
+                throw new IOException("无法打开文件（" +
+                    new Win32Exception(Marshal.GetLastWin32Error()).Message + "）");
+            return new FileStream(new SafeFileHandle(handle, true), FileAccess.Read, 1 << 20);
+        }
+
+        private static FileStream OpenCreate(string path)
+        {
+            var handle = CreateFileW(path, GENERIC_WRITE, 0, IntPtr.Zero,
+                CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, IntPtr.Zero);
+            if (handle == InvalidHandle)
+                throw new IOException("无法创建文件（" +
+                    new Win32Exception(Marshal.GetLastWin32Error()).Message + "）");
+            return new FileStream(new SafeFileHandle(handle, true), FileAccess.Write, 1 << 20);
         }
     }
 }
