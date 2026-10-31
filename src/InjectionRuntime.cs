@@ -80,7 +80,8 @@ namespace CodexZhLauncher
             var arguments = AppActivation.BuildInjectionArguments(rendererPort, locale);
             Report(onProgress, "正在启动 Codex…");
             AppLog.Write("inject.begin path=" + source.ExecutablePath +
-                " port=" + rendererPort + " locale=" + locale);
+                " port=" + rendererPort + " locale=" + locale +
+                " systemProxy=" + DevToolsClient.DescribeSystemProxy(rendererPort));
 
             // 刻意用 LaunchUnpackaged：商店版也要走 Process.Start 直接跑 exe（"未打包运行"），
             // 只有这条路实测能让 --remote-debugging-port 生效。
