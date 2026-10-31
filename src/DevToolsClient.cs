@@ -65,6 +65,27 @@ namespace CodexZhLauncher
             return await ReadTargetsAsync(port);
         }
 
+        /// <summary>
+        /// 记录"系统代理会把这个回环地址解析成什么"。我们自己已经强制直连，
+        /// 但客户机上如果配了代理，这行日志能立刻说明当初为什么连不上。
+        /// </summary>
+        public static string DescribeSystemProxy(int port)
+        {
+            try
+            {
+                var uri = new Uri("http://127.0.0.1:" + port + "/json/list");
+                var proxy = WebRequest.DefaultWebProxy;
+                if (proxy == null) return "none";
+                var resolved = proxy.GetProxy(uri);
+                if (resolved == null || resolved == uri) return "none(direct)";
+                return resolved.ToString();
+            }
+            catch (Exception ex)
+            {
+                return "error:" + ex.Message;
+            }
+        }
+
         public static async Task<string> EvaluateAsync(string webSocketUrl, string expression, bool awaitPromise)
         {
             var response = await SendCommandAsync(
@@ -106,6 +127,8 @@ namespace CodexZhLauncher
             using (var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(12)))
             {
                 socket.Options.KeepAliveInterval = TimeSpan.FromSeconds(10);
+                // 同 ReadTargetsAsync：回环地址必须直连，不能被系统代理接管。
+                socket.Options.Proxy = null;
                 await socket.ConnectAsync(new Uri(webSocketUrl), timeout.Token);
 
                 var message = new Dictionary<string, object>();
@@ -142,6 +165,11 @@ namespace CodexZhLauncher
             using (var client = new WebClient())
             {
                 client.Encoding = Encoding.UTF8;
+                // 必须显式直连：WebClient 默认走系统代理（IE 设置）。
+                // 客户机开着 VPN/代理时，连 127.0.0.1 也可能被转给代理服务器，
+                // 表现为"无法连接到远程服务器"——调试端口其实好好的。
+                // 真实案例（2026-10-31，26.1027）：端口 1 秒就起来了，注入端却等了 43 秒。
+                client.Proxy = null;
                 var json = await client.DownloadStringTaskAsync(
                     new Uri("http://127.0.0.1:" + port + "/json/list"));
                 var items = Serializer.Deserialize<object[]>(json);

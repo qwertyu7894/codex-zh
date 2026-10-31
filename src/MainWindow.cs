@@ -461,8 +461,8 @@ namespace CodexZhLauncher
                     AppendLog("已检测到 " + currentInstall.DisplayName + "，版本 " + currentInstall.Version + "。", Accent);
                     if (LocalizationRuntime.HasLocalizedCopy)
                     {
-                        AppendLog("检测到旧的本地化副本（约 2 GB，位于 %USERPROFILE%\\.codex\\codex-zh）。"
-                            + "运行时注入不再需要它，可在启动时选择删除。", Warning);
+                        AppendLog("检测到本地化副本（约 2 GB，位于 %USERPROFILE%\\.codex\\codex-zh）。"
+                            + "启动时会直接使用它；Codex 升级后会自动重新复制。", TextSecondary);
                     }
                 }
                 else
@@ -586,15 +586,15 @@ namespace CodexZhLauncher
                 : currentInstall.DisplayName + " · " + currentInstall.Version;
             if (LocalizationRuntime.HasLocalizedCopy)
             {
-                // 副本对运行时注入已经没有用了 —— 它只是磁盘补丁那一版的旧快照，
-                // 留着占 2 GB 而且会逐版过期。但不自动删：那是用户磁盘上的东西，得他自己点头。
-                SetStatus("已就绪 · 有旧副本可清理",
-                    source + " · 启动时会先尝试运行时注入，失败自动回退磁盘补丁；另有旧的本地化副本（约 2 GB），启动时会问是否删除",
+                // 有副本就直接用它：启动只要 1 秒，而且 Codex 升级后磁盘补丁路线
+                // 会自动重拷。不再每次先空等 40 多秒去试注定失败的注入。
+                SetStatus("已就绪 · 使用本地化副本",
+                    source + " · 启动时直接使用已汉化的本地化副本（约 2 GB）；Codex 升级后会自动重新复制",
                     Success);
             }
             else
             {
-                SetStatus("已就绪", source + " · 启动时会先尝试运行时注入，失败自动回退磁盘补丁", Success);
+                SetStatus("已就绪", source + " · 首次启动会先尝试运行时注入，失败则复制副本并打补丁", Success);
             }
             primaryLabel.Text = "汉化并启动";
             primaryButton.IsEnabled = true;

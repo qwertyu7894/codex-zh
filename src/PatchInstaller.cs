@@ -320,6 +320,10 @@ namespace CodexZhLauncher
         private static void HandleStoreCopy(InstallRequest request, DiscoveredInstall found,
             string targetApp, LocalizationState statePrev, string nowVersion)
         {
+            // 先把上次中断的残骸处理掉（必要时恢复被挪开的旧副本），
+            // 再判断"到底要不要复制" —— 顺序反了的话，刚恢复的副本会被当成不存在而白拷一遍。
+            CleanupStaleCopyDirectories(targetApp, request.Progress);
+
             var copyAsar = Path.Combine(targetApp, "resources", "app.asar");
             bool needCopy = false;
 
@@ -393,34 +397,196 @@ namespace CodexZhLauncher
             }
             stopwatch.Stop();
 
+            // 旧副本先"挪开"而不是"删掉"：
+            //   删 → 改名的顺序有个窄窗口：旧副本删了、新副本改名失败，用户一时没有可用副本。
+            //   改 → 挪 → 删则是：旧副本只在**新副本已经就位**之后才删除；万一新副本顶不上，
+            //   把旧的原样挪回去即可，最多损失一次复制时间。
+            // 同一父目录内的改名是瞬时的，不涉及数据搬运。
+            var oldDir = (string)null;
             if (Directory.Exists(targetApp))
             {
+                oldDir = targetApp + ".old-" + Guid.NewGuid().ToString("N");
                 Report(request.Progress, "[信息] 替换旧的本地化副本…");
                 try
                 {
-                    FileSystemUtils.DeleteTreeForce(targetApp);
+                    MoveCopyWithRetry(targetApp, oldDir, request);
                 }
                 catch (Exception ex)
                 {
-                    try { if (Directory.Exists(tempDir)) FileSystemUtils.DeleteTreeForce(tempDir); }
-                    catch { }
-                    throw new IOException("无法删除旧副本：" + ex.Message + "。请确认 Codex 已完全退出后重试。", ex);
+                    TryDeleteQuietly(tempDir);
+                    throw new IOException("无法移走旧副本：" + ex.Message + "。请确认 Codex 已完全退出后重试。", ex);
                 }
             }
 
             try
             {
-                Directory.Move(tempDir, targetApp);
+                MoveCopyWithRetry(tempDir, targetApp, request);
             }
             catch (Exception ex)
             {
-                try { if (Directory.Exists(tempDir)) FileSystemUtils.DeleteTreeForce(tempDir); }
-                catch { }
+                if (oldDir != null)
+                {
+                    try
+                    {
+                        MoveCopyWithRetry(oldDir, targetApp, request);
+                        oldDir = null;
+                        Report(request.Progress, "[警告] 新副本没能启用，已恢复旧副本。");
+                    }
+                    catch (Exception restoreEx)
+                    {
+                        AppLog.Write("copy.restore.failed " + restoreEx.Message);
+                        Report(request.Progress, "[错误] 旧副本没能挪回原位：" + restoreEx.Message +
+                            "。它还在：" + oldDir);
+                    }
+                }
+                TryDeleteQuietly(tempDir);
                 throw new IOException("无法启用新副本：" + ex.Message + "。请确认 Codex 已完全退出后重试。", ex);
+            }
+
+            if (oldDir != null)
+            {
+                try
+                {
+                    DeleteCopyWithRetry(oldDir, request);
+                }
+                catch (Exception ex)
+                {
+                    // 旧副本删不掉只是多占 1-2 GB，下次启动会再清一次 —— 不能因此判定安装失败，
+                    // 新副本已经在用了，中文版是能启动的。
+                    AppLog.Write("copy.old.cleanup.failed " + oldDir + " " + ex.Message);
+                    Report(request.Progress, "[警告] 旧副本暂时删不掉，下次启动会再清理：" +
+                        Path.GetFileName(oldDir));
+                }
             }
 
             Report(request.Progress, "[成功] 复制完成，耗时 " +
                 String.Format(CultureInfo.CurrentCulture, "{0:N0}", stopwatch.Elapsed.TotalSeconds) + " 秒");
+        }
+
+        // 杀软/索引器会在刚写完的文件上临时持有句柄：目录改名、删除都会报“访问被拒绝”。
+        // 客户机真实案例（2026-10-31，Codex 26.1027）：3,619 个文件复制成功，
+        // 最后一步 Directory.Move 被拒，整次安装前功尽弃 —— 而客户重跑一次就好了。
+        // 既然“重跑一次就好”，就应该在工具里重试，而不是让人点第二次。
+        private const int CopyIoAttempts = 24;
+        private const int CopyIoRetryDelayMs = 500;
+
+        private static void MoveCopyWithRetry(string source, string destination, InstallRequest request)
+        {
+            Exception last = null;
+            for (int attempt = 1; attempt <= CopyIoAttempts; attempt++)
+            {
+                try
+                {
+                    Directory.Move(source, destination);
+                    if (attempt > 1)
+                        Report(request.Progress, "[信息] 第 " + attempt + " 次尝试后已启用新副本。");
+                    return;
+                }
+                catch (Exception ex)
+                {
+                    last = ex;
+                    if (attempt == 1)
+                        Report(request.Progress, "[警告] 副本目录暂时被占用（多半是杀软在扫描），正在重试…");
+                    if (attempt < CopyIoAttempts)
+                        System.Threading.Thread.Sleep(CopyIoRetryDelayMs);
+                }
+            }
+            throw new IOException(last.Message, last);
+        }
+
+        private static void DeleteCopyWithRetry(string path, InstallRequest request)
+        {
+            Exception last = null;
+            for (int attempt = 1; attempt <= CopyIoAttempts; attempt++)
+            {
+                try
+                {
+                    if (!Directory.Exists(path)) return;
+                    FileSystemUtils.DeleteTreeForce(path);
+                    if (attempt > 1)
+                        Report(request.Progress, "[信息] 第 " + attempt + " 次尝试后已删除旧副本。");
+                    return;
+                }
+                catch (Exception ex)
+                {
+                    last = ex;
+                    if (attempt == 1)
+                        Report(request.Progress, "[警告] 旧副本暂时被占用（多半是杀软在扫描），正在重试…");
+                    if (attempt < CopyIoAttempts)
+                        System.Threading.Thread.Sleep(CopyIoRetryDelayMs);
+                }
+            }
+            throw new IOException(last.Message, last);
+        }
+
+        private static void TryDeleteQuietly(string path)
+        {
+            try
+            {
+                if (Directory.Exists(path)) FileSystemUtils.DeleteTreeForce(path);
+            }
+            catch (Exception ex)
+            {
+                AppLog.Write("copy.temp.cleanup.failed " + path + " " + ex.Message);
+            }
+        }
+
+        /// <summary>
+        /// 处理上次中断留下的残骸（每个约 1-2 GB）：
+        ///   · <c>app.old-*</c>：替换过程中把旧副本挪开了，但新副本没顶上 ——
+        ///     <c>app</c> 不存在时先把它挪回去，别白删一份能用的副本再重拷；
+        ///   · <c>app.copying-*</c>：复制到一半的临时目录，直接删。
+        /// 删不掉只是浪费磁盘，不能影响本次安装。
+        /// </summary>
+        private static void CleanupStaleCopyDirectories(string targetApp, Action<string> progress)
+        {
+            try
+            {
+                var parent = Path.GetDirectoryName(targetApp);
+                if (String.IsNullOrEmpty(parent) || !Directory.Exists(parent)) return;
+                var name = Path.GetFileName(targetApp);
+
+                // 1) 先救：app 丢了但还有挪开的旧副本。
+                if (!Directory.Exists(targetApp))
+                {
+                    var rescued = Directory.GetDirectories(parent, name + ".old-*");
+                    if (rescued.Length > 0)
+                    {
+                        Array.Sort(rescued);
+                        var newest = rescued[rescued.Length - 1];
+                        try
+                        {
+                            Directory.Move(newest, targetApp);
+                            Report(progress, "[警告] 上次替换中途中断，已先恢复旧副本。");
+                        }
+                        catch (Exception ex)
+                        {
+                            AppLog.Write("copy.stale.restore.failed " + newest + " " + ex.Message);
+                        }
+                    }
+                }
+
+                // 2) 再清：其余残骸都删掉。
+                foreach (var pattern in new[] { name + ".copying-*", name + ".old-*" })
+                {
+                    foreach (var dir in Directory.GetDirectories(parent, pattern))
+                    {
+                        try
+                        {
+                            FileSystemUtils.DeleteTreeForce(dir);
+                            Report(progress, "[信息] 已清理上次失败留下的临时目录：" + Path.GetFileName(dir));
+                        }
+                        catch (Exception ex)
+                        {
+                            AppLog.Write("copy.stale.cleanup.failed " + dir + " " + ex.Message);
+                        }
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                AppLog.Write("copy.stale.scan.failed " + ex.Message);
+            }
         }
 
         private static string FindMissingCopyFile(string appDir)
