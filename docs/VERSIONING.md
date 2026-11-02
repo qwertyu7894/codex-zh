@@ -185,7 +185,7 @@ gh release create v1.2.3 "..\release\GPTHanhua-v1.2.3-Windows-x64.zip" `
 - [ ] `src/AppInfo.cs` 的 `AppInfo.Version` 已改，`src/Program.cs` 两行同步
 - [ ] `CHANGELOG.md` 有该版本段落（发布说明的唯一来源）
 - [ ] `verify-version.ps1 -SkipStamp` 退出码 0
-- [ ] `publish.ps1` 跑完，`C:\Users\jojo\Music\GPTHanhua.exe` 已更新
+- [ ] `publish.ps1` 跑完，`%USERPROFILE%\Music\GPTHanhua.exe` 已更新
 - [ ] **真机跑一次**：双击工具 → 中文界面 + 中文原生菜单
 - [ ] `verify-version.ps1 -Tag vX.Y.Z` 退出码 0（标签指向的提交自称同一版本）
 - [ ] Release 附件里 `SHA256SUMS.txt` 与 zip 内 exe 的实际 SHA-256 一致

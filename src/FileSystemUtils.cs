@@ -172,7 +172,7 @@ namespace CodexZhLauncher
         /// ERROR_PATH_NOT_FOUND；而 System.IO 的 <c>Directory.CreateDirectory</c> 会一路补建。
         /// 换成 Win32 之后必须自己把这个语义补回来，否则全新机器上
         /// <c>%USERPROFILE%\.codex\codex-zh</c> 还不存在时首次安装会直接失败。
-        /// 客户机真实案例（2026-11-02，用户 HP）：报"系统找不到指定的路径"。
+        /// 客户机真实案例（2026-11-02）：报"系统找不到指定的路径"。
         /// </summary>
         private static void CreateDirectoryTree(string extendedPath)
         {

@@ -101,7 +101,7 @@ SHA256SUMS.txt        ← 该 exe 的 SHA-256
 品牌显示名里。
 
 Release 页面上传的就是这两个 zip。交付给单个客户时用的是
-`C:\Users\jojo\Music\GPTHanhua.exe`（`publish.ps1` 自动同步）。
+`%USERPROFILE%\Music\GPTHanhua.exe`（`publish.ps1` 自动同步）。
 
 ---
 
