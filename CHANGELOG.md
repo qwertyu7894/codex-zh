@@ -7,6 +7,15 @@
 
 ---
 
+## v1.4.4
+
+### 修复首次安装时报“系统找不到指定的路径”
+
+1.4.3 把复制改成 Win32 API 后，`CreateDirectoryW` 只创建最后一级目录，
+不会像 `Directory.CreateDirectory` 那样补建父目录。全新机器上
+`%USERPROFILE%\.codex\codex-zh` 还不存在时，第一次复制会立刻失败。
+现在会逐级补建父目录。
+
 ## v1.4.3
 
 ### 修复 Codex 26.1027 起汉化失败

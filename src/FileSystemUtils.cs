@@ -130,14 +130,7 @@ namespace CodexZhLauncher
 
         private static void CopyTreeCore(string source, string destination)
         {
-            if (!CreateDirectoryW(destination, IntPtr.Zero))
-            {
-                int error = Marshal.GetLastWin32Error();
-                // 目录已存在时 CreateDirectory 会返回 ERROR_ALREADY_EXISTS，属正常。
-                if (error != 183)
-                    throw new IOException("无法创建目录：" + destination + "（" +
-                        new Win32Exception(error).Message + "）");
-            }
+            CreateDirectoryTree(destination);
 
             var buffer = new byte[8 * 1024 * 1024];
             foreach (var entry in Enumerate(source))
@@ -170,6 +163,38 @@ namespace CodexZhLauncher
                         "（" + ex.Message + "）", ex);
                 }
             }
+        }
+
+        /// <summary>
+        /// 创建目录，并自动补建缺失的父目录。
+        ///
+        /// Win32 的 <c>CreateDirectoryW</c> 只创建最后一级 —— 父目录不存在时返回
+        /// ERROR_PATH_NOT_FOUND；而 System.IO 的 <c>Directory.CreateDirectory</c> 会一路补建。
+        /// 换成 Win32 之后必须自己把这个语义补回来，否则全新机器上
+        /// <c>%USERPROFILE%\.codex\codex-zh</c> 还不存在时首次安装会直接失败。
+        /// 客户机真实案例（2026-11-02，用户 HP）：报"系统找不到指定的路径"。
+        /// </summary>
+        private static void CreateDirectoryTree(string extendedPath)
+        {
+            // 盘符根（\\?\C:）必然存在，也不该再往上补。
+            if (extendedPath.EndsWith(":", StringComparison.Ordinal)) return;
+
+            if (CreateDirectoryW(extendedPath, IntPtr.Zero)) return;
+            int error = Marshal.GetLastWin32Error();
+            if (error == 183) return; // ERROR_ALREADY_EXISTS
+
+            var trimmed = extendedPath.TrimEnd('\\');
+            int split = trimmed.LastIndexOf('\\');
+            if (split > 0)
+            {
+                CreateDirectoryTree(trimmed.Substring(0, split));
+                if (CreateDirectoryW(extendedPath, IntPtr.Zero)) return;
+                error = Marshal.GetLastWin32Error();
+                if (error == 183) return;
+            }
+
+            throw new IOException("无法创建目录：" + extendedPath + "（" +
+                new Win32Exception(error).Message + "）");
         }
 
         /// <summary>等价于 Remove-Item -Recurse -Force：先清只读属性再删。</summary>
