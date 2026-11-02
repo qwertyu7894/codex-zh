@@ -62,7 +62,24 @@
 
 本分支改用两条路，**互为保险**：
 
-### 默认：运行时注入（`src/InjectionRuntime.cs`）
+### 路线选择：有本地化副本时优先副本（`src/LaunchCoordinator.cs`）
+
+这是启动流程的固定顺序，**不要随意调整**：
+
+1. 有 Codex 在跑 → 先关掉（否则新实例会被单实例锁顶掉）
+2. **`%USERPROFILE%\.codex\codex-zh\app` 里已有本地化副本 → 直接走磁盘补丁 / 启动副本，
+   完全不尝试注入**
+3. 没有副本 → 才尝试运行时注入（只有首次安装会走到这里）
+4. 注入失败 → 回退创建副本
+
+原因：注入在本机实测约 43 秒（大头是等 App 自己重取一次动态配置），而副本启动只要
+约 2 秒；商店版在客户机上还经常因为 `WindowsApps` 权限或单实例锁直接注入失败。
+副本落后于新版时会由磁盘补丁路线自动重拷，所以"优先副本"不会把用户钉在旧版本上。
+
+日志特征：走副本时一定有 `launch.route.prefer-copy` 和 `launch.mode=patch prefer-copy`；
+只有出现 `inject.begin` 而没有这两行，才说明这次真的尝试了注入。
+
+### 首次安装才用：运行时注入（`src/InjectionRuntime.cs`）
 
 启动 Codex 时带 `--remote-debugging-port=<随机回环端口>`，连上**渲染进程**注入
 `shared/i18n-bootstrap.js`：
