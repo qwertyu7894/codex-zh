@@ -272,6 +272,19 @@ namespace CodexZhLauncher
             return CodexProcessManager.Scan(install).TotalPotentialCount;
         }
 
+        private static string lastStoreState;
+
+        /// <summary>
+        /// 商店包探测结果只在“状态变化”时写日志。UI 每几秒轮询一次，
+        /// 每次都写会把 launcher.log 刷满。
+        /// </summary>
+        private static void LogStoreStateOnce(string state)
+        {
+            if (String.Equals(state, lastStoreState, StringComparison.Ordinal)) return;
+            lastStoreState = state;
+            AppLog.Write("detect.store." + state);
+        }
+
         private static Task<CodexInstall> DetectStorePackageAsync()
         {
             // 原生读 HKCU 的 MSIX 包仓库，不再启动 PowerShell 子进程。
@@ -280,12 +293,22 @@ namespace CodexZhLauncher
             {
                 var package = NativePackageLocator.FindNewest(PackageName);
                 if (package == null || String.IsNullOrWhiteSpace(package.InstallLocation))
+                {
+                    // 商店升级的窗口期里，包仓库条目会短暂消失/重建。以前这里什么都不记，
+                    // 客户机日志里只剩一句“未检测到 Codex”，无法判断是没装还是正在升级。
+                    // 只在状态变化时写一次，避免轮询刷屏。
+                    LogStoreStateOnce("none");
                     return Task.FromResult<CodexInstall>(null);
+                }
 
                 var applicationId = ReadApplicationId(Path.Combine(package.InstallLocation, "AppxManifest.xml"));
                 if (String.IsNullOrWhiteSpace(applicationId)) applicationId = "App";
 
                 var executable = FindPackagedExecutable(package.InstallLocation);
+                LogStoreStateOnce("ok version=" + package.Version +
+                    " location=" + package.InstallLocation +
+                    " exe=" + (String.IsNullOrWhiteSpace(executable) ? "(未找到)" : executable));
+
                 return Task.FromResult(new CodexInstall
                 {
                     Kind = "Microsoft Store",
@@ -296,8 +319,9 @@ namespace CodexZhLauncher
                     AppUserModelId = package.PackageFamilyName + "!" + applicationId
                 });
             }
-            catch
+            catch (Exception ex)
             {
+                LogStoreStateOnce("error " + ex.GetType().Name + ": " + ex.Message);
                 return Task.FromResult<CodexInstall>(null);
             }
         }
