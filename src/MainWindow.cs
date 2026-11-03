@@ -429,6 +429,24 @@ namespace CodexZhLauncher
             return template;
         }
 
+        /// <summary>
+        /// 安装记录存在、但可执行文件还不在（商店升级窗口、杀软隔离等）。
+        /// 这种情况不能当成"已检测到" —— 否则用户点启动才看到失败。
+        /// </summary>
+        private static bool HasUsableExecutable(CodexInstall install)
+        {
+            try
+            {
+                return install != null &&
+                    !String.IsNullOrWhiteSpace(install.ExecutablePath) &&
+                    File.Exists(install.ExecutablePath);
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
         private async Task DetectInstallAsync()
         {
             if (busy) return;
@@ -441,12 +459,22 @@ namespace CodexZhLauncher
                 // 回退走磁盘补丁时，LaunchCoordinator 会自己去解析副本。
                 currentInstall = await CodexDiscovery.DetectSourceInstallAsync();
 
+                // 商店版升级时，包仓库里可能只剩一条记录、exe 还没落盘。
+                // CodexInstall.IsValid 对商店包恒为 true，不额外查一下会把
+                // “正在升级”显示成“已检测到”，点启动才失败。
+                if (currentInstall != null && !HasUsableExecutable(currentInstall))
+                {
+                    AppLog.Write("detect.install.not-ready path=" +
+                        (currentInstall.ExecutablePath ?? "(空)"));
+                    currentInstall = null;
+                }
+
                 // 源安装被卸载、只剩本地化副本时，仍然允许用副本继续
                 // （补丁引擎里也有同样的回退；这里让 GUI 入口也能走到它）。
                 if (currentInstall == null)
                 {
                     var fallback = await CodexDiscovery.DetectAsync();
-                    if (fallback != null && fallback.IsValid)
+                    if (fallback != null && fallback.IsValid && HasUsableExecutable(fallback))
                     {
                         currentInstall = fallback;
                         AppendLog("未检测到原始安装，使用现有本地化副本继续。", Warning);
@@ -467,7 +495,10 @@ namespace CodexZhLauncher
                 }
                 else
                 {
-                    AppendLog("未检测到 Codex Desktop，可手动选择可执行文件。", Warning);
+                    // 商店版升级时包目录会短暂消失，这段时间检测必然失败。
+                    // 说清楚"可能正在升级"，比只报"未检测到"少一轮来回。
+                    AppendLog("未检测到 Codex Desktop（若它正在自动升级，工具会自动重试）。"
+                        + "也可以手动选择可执行文件。", Warning);
                 }
             }
             catch (Exception ex)
