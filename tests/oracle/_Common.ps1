@@ -30,6 +30,48 @@ if ($markerIndex -lt 0) { throw 'section marker not found in CodexZh.ps1' }
 
 . (Join-Path $oracleTempDir 'CodexZh.ps1')
 
+# Codex 26.1029 changed the minifier's quote style: the i18n default is now
+# written as "enable_i18n",!1 instead of `enable_i18n`,!1. The legacy table is
+# kept frozen as a historical reference, so append the quoted variant here
+# (non-critical) to keep this oracle able to produce a byte-identical patch
+# for whichever version is installed.
+$script:LegacyGetCodexPatchRules = ${function:Get-CodexPatchRules}
+function Get-CodexPatchRules {
+    $rules = @(& $script:LegacyGetCodexPatchRules)
+
+    # Primary rule targets the quote style used by current builds (26.1029+).
+    $rules[0].From = '"enable_i18n",!1'
+    $rules[0].To   = '"enable_i18n",!0'
+    $rules[0].AlreadyPatchedContext = '"locale_source"'
+
+    # Keep the backtick form as a non-critical fallback so an older fixture
+    # still patches (the gate asserts on the primary rule id).
+    $rules += @(
+        @{
+            Id       = 'enable-i18n-default-backtick'
+            Scope    = 'webview/assets'
+            Ext      = '.js'
+            From     = '`enable_i18n`,!1'
+            To       = '`enable_i18n`,!0'
+            Expect   = 0
+            Critical = $false
+            AlreadyPatchedContext = '`locale_source`'
+            Desc     = 'backtick variant (pre-26.1029)'
+        },
+        @{
+            Id       = 'enable-i18n-default-legacy-quoted'
+            Scope    = '.vite/build'
+            Ext      = '.js'
+            From     = '"enable_i18n",!1'
+            To       = '"enable_i18n",!0'
+            Expect   = 0
+            Critical = $false
+            Desc     = 'quoted variant (26.1029+)'
+        }
+    )
+    return $rules
+}
+
 # Keep every caller away from the real user profile. Gate scripts may override
 # these after dot-sourcing this file.
 $Root = Join-Path $oracleTempDir 'root'

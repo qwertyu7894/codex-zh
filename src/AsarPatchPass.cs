@@ -31,6 +31,13 @@ namespace CodexZhLauncher
         public long DataOffset;
     }
 
+    /// <summary>一个命中的文件，以及它命中的是哪一种写法。</summary>
+    internal sealed class PatchHit
+    {
+        public AsarEntryRef Entry;
+        public PatchNeedle Needle;
+    }
+
     /// <summary>
     /// 与 localize/CodexZh.ps1 的 Invoke-PatchPass 对应。
     /// </summary>
@@ -48,25 +55,37 @@ namespace CodexZhLauncher
                 Report(progress, String.Format("[信息] 规则 [{0}] 在 {1} 下找到 {2} 个候选文件",
                     rule.Id, rule.Scope, candidates.Count));
 
-                var hitFiles = new List<AsarEntryRef>();
+                // 同一规则可能有多条挑串（不同版本的压缩产物引号不同），
+                // 任意一条命中即算这个文件命中。
+                var hitFiles = new List<PatchHit>();
                 foreach (var entry in candidates)
                 {
-                    if (AsarArchive.EntryContains(asarPath, info.DataOffset, entry.Offset, entry.Size, rule.From))
-                        hitFiles.Add(entry);
+                    var needle = FindNeedle(asarPath, info.DataOffset, entry, rule);
+                    if (needle != null)
+                        hitFiles.Add(new PatchHit { Entry = entry, Needle = needle });
                 }
 
                 if (hitFiles.Count == 0)
                 {
                     AsarEntryRef alreadyEntry = null;
+                    PatchNeedle alreadyNeedle = null;
+                    string alreadyContext = null;
                     foreach (var entry in candidates)
                     {
-                        if (!AsarArchive.EntryContains(asarPath, info.DataOffset, entry.Offset, entry.Size, rule.To))
-                            continue;
-                        if (rule.HasAlreadyPatchedContext &&
-                            !AsarArchive.EntryContains(asarPath, info.DataOffset, entry.Offset, entry.Size, rule.AlreadyPatchedContext))
-                            continue;
-                        alreadyEntry = entry;
-                        break;
+                        foreach (var needle in rule.Needles())
+                        {
+                            if (!AsarArchive.EntryContains(asarPath, info.DataOffset, entry.Offset, entry.Size, needle.To))
+                                continue;
+                            if (rule.HasAlreadyPatchedContext)
+                            {
+                                alreadyContext = FindContext(asarPath, info.DataOffset, entry, rule);
+                                if (alreadyContext == null) continue;
+                            }
+                            alreadyEntry = entry;
+                            alreadyNeedle = needle;
+                            break;
+                        }
+                        if (alreadyEntry != null) break;
                     }
 
                     if (alreadyEntry != null)
@@ -101,8 +120,8 @@ namespace CodexZhLauncher
                             Path = alreadyEntry.Path,
                             Offset = alreadyEntry.Offset,
                             Size = alreadyEntry.Size,
-                            Needle = rule.To,
-                            Context = rule.HasAlreadyPatchedContext ? rule.AlreadyPatchedContext : String.Empty
+                            Needle = alreadyNeedle.To,
+                            Context = alreadyContext ?? String.Empty
                         });
                         result.Results.Add(ruleResult);
                     }
@@ -121,20 +140,24 @@ namespace CodexZhLauncher
 
                 int totalHits = 0;
                 var entryRecords = new List<PatchEntryRecord>();
-                foreach (var entry in hitFiles)
+                foreach (var hit in hitFiles)
                 {
-                    var patch = AsarPatcher.PatchEntry(asarPath, entry.Path, rule.From, rule.To, rule.Desc, apply);
+                    var entry = hit.Entry;
+                    var patch = AsarPatcher.PatchEntry(asarPath, entry.Path, hit.Needle.From, hit.Needle.To, rule.Desc, apply);
                     if (patch.Status == "ok")
                     {
                         totalHits += patch.Hits;
+                        var context = rule.HasAlreadyPatchedContext
+                            ? (FindContext(asarPath, info.DataOffset, entry, rule) ?? rule.AlreadyPatchedContext)
+                            : String.Empty;
                         entryRecords.Add(new PatchEntryRecord
                         {
                             Id = rule.Id,
                             Path = entry.Path,
                             Offset = entry.Offset,
                             Size = entry.Size,
-                            Needle = rule.To,
-                            Context = rule.HasAlreadyPatchedContext ? rule.AlreadyPatchedContext : String.Empty
+                            Needle = hit.Needle.To,
+                            Context = context
                         });
                         Report(progress, String.Format("[信息]       {0} (命中 {1}, 完整性哈希更新 {2})",
                             entry.Path, patch.Hits, patch.IntegrityUpdated));
@@ -168,6 +191,28 @@ namespace CodexZhLauncher
             }
 
             return result;
+        }
+
+        private static PatchNeedle FindNeedle(string asarPath, long dataOffset, AsarEntryRef entry,
+            CodexPatchRule rule)
+        {
+            foreach (var needle in rule.Needles())
+            {
+                if (AsarArchive.EntryContains(asarPath, dataOffset, entry.Offset, entry.Size, needle.From))
+                    return needle;
+            }
+            return null;
+        }
+
+        private static string FindContext(string asarPath, long dataOffset, AsarEntryRef entry,
+            CodexPatchRule rule)
+        {
+            foreach (var context in rule.Contexts())
+            {
+                if (AsarArchive.EntryContains(asarPath, dataOffset, entry.Offset, entry.Size, context))
+                    return context;
+            }
+            return null;
         }
 
         private static void Report(Action<string> progress, string message)
