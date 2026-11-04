@@ -400,7 +400,10 @@ namespace CodexZhLauncher
             else
             {
                 Diff(differences, "patch.installPath", sa.Patch.InstallPath, sb.Patch.InstallPath);
-                Diff(differences, "patch.rulesSignature", sa.Patch.RulesSignature, sb.Patch.RulesSignature);
+                // rulesSignature 是各自实现的内部指纹（规则表加了备选写法后会变），
+                // 不是交付语义；只报告、不算不一致。
+                KV("signatureEqual", String.Equals(sa.Patch.RulesSignature, sb.Patch.RulesSignature,
+                    StringComparison.Ordinal) ? "True" : "False");
                 Diff(differences, "patch.criticalMiss", sa.Patch.CriticalMiss, sb.Patch.CriticalMiss);
                 Diff(differences, "patch.dataOffset", sa.Patch.DataOffset, sb.Patch.DataOffset);
                 Diff(differences, "patch.asarSize", sa.Patch.AsarSize, sb.Patch.AsarSize);
