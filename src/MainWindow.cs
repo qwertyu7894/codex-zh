@@ -55,6 +55,7 @@ namespace CodexZhLauncher
         private int lastRunningCount = -1;
         private string shutdownFailureDetail;
         private bool copyCleanupAsked;
+        private bool legacyCopyReported;
         // 上次启动失败/未完全生效的原因。UpdatePresentation 会被状态轮询反复调用，
         // 必须留一个字段把失败状态撑住，否则几秒后就会被“已就绪”覆盖。
         private string lastLaunchFailure;
@@ -481,6 +482,7 @@ namespace CodexZhLauncher
                     }
                 }
 
+                ReportLegacyCopiesOnce();
                 missingPollCount = 0;
                 if (currentInstall != null)
                 {
@@ -521,6 +523,20 @@ namespace CodexZhLauncher
                 {
                     UpdatePresentation();
                 }
+            }
+        }
+
+        private void ReportLegacyCopiesOnce()
+        {
+            if (legacyCopyReported) return;
+            legacyCopyReported = true;
+            foreach (var candidate in LegacyCopyDiscovery.Find(LocalizationPaths.ConfigDirectory))
+            {
+                AppendLog(candidate.Kind == "inaccessible" || candidate.Kind == "reparse-point"
+                    ? "无法核实疑似历史副本 %USERPROFILE%\\.codex\\codex-localized，未作更改。"
+                    : "发现疑似历史或第三方副本 %USERPROFILE%\\.codex\\codex-localized；"
+                        + "来源和配置依赖尚未核实，本工具未删除，请勿仅凭目录名称直接清理。", Warning);
+                AppLog.Write("copy.legacy.detected kind=" + candidate.Kind);
             }
         }
 
@@ -725,7 +741,7 @@ namespace CodexZhLauncher
                 !copyCleanupAsked)
             {
                 copyCleanupAsked = true;
-                OfferCopyCleanup(routeMode);
+                OfferCopyCleanup(routeMode, launchComplete);
             }
         }
 
@@ -742,13 +758,12 @@ namespace CodexZhLauncher
         ///   · 选过"是"但当时删不掉（Codex 正跑在副本里，文件被占用）→ 下次启动
         ///     静默重试，不再弹框打扰。
         ///
-        /// **边界极重要**：只删 <c>%USERPROFILE%\.codex\codex-zh\</c> 这一个目录，
-        /// **绝不碰** <c>%USERPROFILE%\.codex\config.toml</c> —— 那是 localeOverride 所在，
-        /// 删了原生菜单就回英文。两者是同级不同项，config.toml 在上一层，不在被删目录里。
+        /// 仅处理当前固定副本根目录。配置虽然在同级目录，里面的 MCP/notify
+        /// 却可能引用副本内部文件；删除前必须检查引用，不能只看配置文件放在哪里。
         /// </summary>
-        private void OfferCopyCleanup(string launchMode)
+        private void OfferCopyCleanup(string launchMode, bool launchComplete)
         {
-            if (!LocalizationRuntime.HasLocalizedCopy) return;
+            if (!launchComplete || !LocalizationRuntime.HasLocalizedCopy) return;
 
             var root = LocalizationRuntime.LocalizedRoot;
             var decision = AppSettings.Get(AppSettings.CopyCleanupKey);
@@ -775,20 +790,28 @@ namespace CodexZhLauncher
                 return;
             }
 
-            // 选过"是"但上次没删成：静默重试。成功说一声，失败也不打扰。
+            var cleanupRequest = CreateCopyCleanupRequest(root, launchMode, launchComplete);
+            var safety = CopyCleanupGuard.Check(cleanupRequest);
+            if (safety.State != CopyCleanupState.ClearWithinScope)
+            {
+                ReportCopyCleanupBlocked(safety);
+                return;
+            }
+
+            // 旧批准不是安全证明；静默重试也要在真正清理前重新读取配置。
             if (String.Equals(decision, AppSettings.CopyCleanupApproved, StringComparison.Ordinal))
             {
-                TryDeleteCopy(root, false);
+                TryDeleteCopy(cleanupRequest, false);
                 return;
             }
 
             var answer = MessageBox.Show(
                 this,
-                "检测到旧的本地化副本：\n\n" + root +
-                "\n\n它是磁盘补丁方案复制出来的整份 Codex（约 2 GB）。\n" +
-                "本机已经能用运行时注入，这份副本用不上了。\n\n" +
-                "是否删除以释放磁盘空间？\n\n" +
-                "（只删上面这一个目录；你的 Codex 配置、登录状态和聊天记录都不在里面）\n\n" +
+                "检测到本地化副本：\n\n%USERPROFILE%\\.codex\\codex-zh\n\n" +
+                "本次运行时注入已成功。本次检查未发现 Codex 配置引用此副本。\n" +
+                "是否把它移到回收站？（约 2 GB）\n\n" +
+                "操作前会再次检查 config.toml 与浏览器宿主配置；发现依赖或无法检查时会保留目录。\n" +
+                "工具不会自动改写 MCP、notify 等配置。\n\n" +
                 "选「否」以后不再询问。",
                 "清理旧的本地化副本",
                 MessageBoxButton.YesNo,
@@ -804,35 +827,62 @@ namespace CodexZhLauncher
             }
 
             AppSettings.Set(AppSettings.CopyCleanupKey, AppSettings.CopyCleanupApproved);
-            TryDeleteCopy(root, true);
+            TryDeleteCopy(cleanupRequest, true);
         }
 
-        /// <summary>
-        /// 删副本。删不掉时：用户刚点过"是"那一次说清原因和手工做法；
-        /// 之后的重试只写日志 —— 每次开工具都弹一遍"删不掉"正是要消灭的骚扰。
-        /// </summary>
-        private void TryDeleteCopy(string root, bool explainFailure)
+        private static CopyCleanupRequest CreateCopyCleanupRequest(string root, string mode, bool launchComplete)
         {
-            AppendLog("正在删除本地化副本（约 2 GB，可能需要一会儿）…", TextSecondary);
+            return new CopyCleanupRequest
+            {
+                CopyRoot = root,
+                ExpectedRoot = LocalizationPaths.Root,
+                DefaultConfigDirectory = LocalizationPaths.ConfigDirectory,
+                CodexHome = Environment.GetEnvironmentVariable("CODEX_HOME"),
+                ResolveEnvironment = Environment.GetEnvironmentVariable,
+                Mode = mode,
+                LaunchComplete = launchComplete,
+                Approved = false
+            };
+        }
+
+        private void ReportCopyCleanupBlocked(CopyCleanupResult result)
+        {
+            AppendLog(result.State == CopyCleanupState.Referenced
+                ? "配置仍依赖本地化副本，已保留目录；工具未修改配置。"
+                : "无法完成副本清理安全检查，已保留目录；工具未修改配置。", Warning);
+            AppLog.Write("copy.cleanup.blocked " + result.Describe());
+        }
+
+        /// <summary>统一保护首次确认与旧批准重试；无法回收时绝不改成永久删除。</summary>
+        private void TryDeleteCopy(CopyCleanupRequest request, bool explainFailure)
+        {
             try
             {
-                Directory.Delete(root, true);
-                AppendLog("本地化副本已删除。" + root, Accent);
-                AppLog.Write("copy.cleanup.done " + root);
+                request.Approved = true;
+                var result = CopyCleanupGuard.TryCleanup(request,
+                    delegate(string path)
+                    {
+                        AppendLog("正在把本地化副本移到回收站…", TextSecondary);
+                        Microsoft.VisualBasic.FileIO.FileSystem.DeleteDirectory(path,
+                            Microsoft.VisualBasic.FileIO.UIOption.OnlyErrorDialogs,
+                            Microsoft.VisualBasic.FileIO.RecycleOption.SendToRecycleBin,
+                            Microsoft.VisualBasic.FileIO.UICancelOption.ThrowException);
+                    });
+                if (result.State != CopyCleanupState.ClearWithinScope)
+                {
+                    ReportCopyCleanupBlocked(result);
+                    return;
+                }
+                AppendLog("本地化副本已移到回收站；确认不再需要后可自行清空。", Accent);
+                AppLog.Write("copy.cleanup.recycled");
             }
             catch (Exception ex)
             {
-                AppLog.Write("copy.cleanup.failed " + ex.Message);
-                if (explainFailure)
-                {
-                    AppendLog("删除没成功：" + ex.Message, Warning);
-                    AppendLog("多半是中文版 Codex 正跑在这份副本里、文件被占用。关掉 Codex 后" +
-                        "直接删掉这个目录即可，之后不会再提示：" + root, TextSecondary);
-                }
-                else
-                {
-                    AppendLog("本地化副本仍删不掉（" + ex.Message + "），已跳过，不再提示。", TextSecondary);
-                }
+                // Shell/IO 异常可能带个人路径，只记异常类型，不写原文。
+                AppLog.Write("copy.cleanup.failed type=" + ex.GetType().Name);
+                AppendLog(explainFailure
+                    ? "副本未能移到回收站（可能被占用），未执行永久删除。请先核实配置依赖，勿直接手工删除。"
+                    : "副本仍无法安全回收，已跳过本次清理。", TextSecondary);
             }
             UpdatePresentation();
         }

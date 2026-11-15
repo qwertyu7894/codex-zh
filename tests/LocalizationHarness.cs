@@ -27,6 +27,7 @@ namespace CodexZhLauncher
             {
                 switch (args[0])
                 {
+                    case "copy-cleanup-self-test": return CopyCleanupTests.Run();
                     case "asar-inspect": return AsarInspect(args);
                     case "asar-list": return AsarList(args);
                     case "asar-entry": return AsarEntry(args);

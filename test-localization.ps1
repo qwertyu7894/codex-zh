@@ -19,9 +19,13 @@ if (-not (Test-Path -LiteralPath $outDir)) { New-Item -ItemType Directory -Path 
 
 $sources = @(
     (Join-Path $repoRoot 'tests\LocalizationHarness.cs'),
+    (Join-Path $repoRoot 'tests\CopyCleanupTests.cs'),
+    (Join-Path $repoRoot 'tests\LegacyCopyDiscoveryTests.cs'),
     (Join-Path $repoRoot 'src\Models.cs'),
     (Join-Path $repoRoot 'src\AppLog.cs'),
     (Join-Path $repoRoot 'src\LocalizationPaths.cs'),
+    (Join-Path $repoRoot 'src\CopyCleanupGuard.cs'),
+    (Join-Path $repoRoot 'src\LegacyCopyDiscovery.cs'),
     (Join-Path $repoRoot 'src\AppIconRegistration.cs'),
     (Join-Path $repoRoot 'src\AsarArchive.cs'),
     (Join-Path $repoRoot 'src\AsarPatcher.cs'),
@@ -47,6 +51,7 @@ $cscArgs = @(
     '/main:CodexZhLauncher.LocalizationHarness',
     ('/reference:' + (Join-Path $frameworkDir 'System.dll')),
     ('/reference:' + (Join-Path $frameworkDir 'System.Core.dll')),
+    ('/reference:' + (Join-Path $frameworkDir 'Microsoft.VisualBasic.dll')),
     ('/reference:' + (Join-Path $frameworkDir 'System.Web.Extensions.dll'))
 ) + $sources
 
@@ -55,13 +60,21 @@ if ($LASTEXITCODE -ne 0) { throw "harness build failed with exit code $LASTEXITC
 Write-Output ('harness=' + $outExe)
 
 if ($SelfTest) {
+    & $outExe copy-cleanup-self-test
+    if ($LASTEXITCODE -ne 0) { throw "copy cleanup tests failed: $LASTEXITCODE" }
     $asar = Join-Path ([System.IO.Path]::GetTempPath()) ('codexzh-selftest-' + [guid]::NewGuid().ToString('N') + '.asar')
     try {
         $bytes = New-Object byte[] 32
         [System.IO.File]::WriteAllBytes($asar, $bytes)
-        $failed = $false
-        try { & $outExe asar-inspect --asar $asar *> $null } catch { $failed = $true }
-        if (-not $failed) { throw 'self-test: malformed asar should have failed' }
+        $previousErrorAction = $ErrorActionPreference
+        try {
+            $ErrorActionPreference = 'Continue'
+            & $outExe asar-inspect --asar $asar *> $null
+            $malformedExit = $LASTEXITCODE
+        } finally {
+            $ErrorActionPreference = $previousErrorAction
+        }
+        if ($malformedExit -eq 0) { throw 'self-test: malformed asar should have failed' }
         Write-Output 'PASS self-test'
     } finally {
         if (Test-Path -LiteralPath $asar) { Remove-Item -LiteralPath $asar -Force }
@@ -117,7 +130,7 @@ try {
     New-Fixture $psApp $SourceApp
     New-Fixture $csApp $SourceApp
 
-    & $powerShellExe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $oracleDir 'AsarGate.ps1') `
+    & $powerShellExe -NoProfile -File (Join-Path $oracleDir 'AsarGate.ps1') `
         -Mode patch-pass -App $psApp -Apply *> (Join-Path $work 'patch-ps.log')
     if ($LASTEXITCODE -ne 0) { throw "PS patch-pass failed: $LASTEXITCODE" }
     $psPatch = Get-Content -LiteralPath (Join-Path $work 'patch-ps.log')
@@ -134,7 +147,7 @@ try {
     }
     Assert-SameHash (Join-Path $psApp 'resources\app.asar') (Join-Path $csApp 'resources\app.asar') 'patch-pass asar'
 
-    & $powerShellExe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $oracleDir 'AsarGate.ps1') `
+    & $powerShellExe -NoProfile -File (Join-Path $oracleDir 'AsarGate.ps1') `
         -Mode embedded-status -App $psApp -Asar (Join-Path $psApp 'resources\app.asar') -Apply *> (Join-Path $work 'embedded-ps.log')
     if ($LASTEXITCODE -ne 0) { throw "PS embedded integrity failed: $LASTEXITCODE" }
     & $outExe embedded-status --app $csApp --asar (Join-Path $csApp 'resources\app.asar') --apply *> $null
@@ -150,7 +163,7 @@ try {
     $csConfig = Join-Path $work 'direct\config-cs.toml'
     New-Fixture $directApp $SourceApp
 
-    & $powerShellExe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $oracleDir 'InstallGate.ps1') `
+    & $powerShellExe -NoProfile -File (Join-Path $oracleDir 'InstallGate.ps1') `
         -SourceApp $directApp -StateRoot $psRoot -ConfigPath $psConfig -Apply *> (Join-Path $work 'install-ps.log')
     if ($LASTEXITCODE -ne 0) { throw "PS install failed: $LASTEXITCODE" }
 
@@ -213,7 +226,7 @@ try {
         [System.IO.File]::WriteAllText((Join-Path $localeRoot ('cs\' + $name + '.toml')), $content, (New-Object System.Text.UTF8Encoding($false)))
     }
     foreach ($name in @('case1', 'case2', 'case3', 'case4', 'case5')) {
-        & $powerShellExe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $oracleDir 'LocaleGate.ps1') `
+        & $powerShellExe -NoProfile -File (Join-Path $oracleDir 'LocaleGate.ps1') `
             -Path (Join-Path $localeRoot ('ps\' + $name + '.toml')) -Apply *> $null
         if ($LASTEXITCODE -ne 0) { throw "PS locale case failed: $name" }
         & $outExe locale-override --path (Join-Path $localeRoot ('cs\' + $name + '.toml')) --apply *> $null

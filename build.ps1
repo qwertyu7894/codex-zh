@@ -64,6 +64,7 @@ $references = @(
     (Join-Path $frameworkRoot 'WPF\WindowsBase.dll'),
     (Join-Path $frameworkRoot 'System.dll'),
     (Join-Path $frameworkRoot 'System.Core.dll'),
+    (Join-Path $frameworkRoot 'Microsoft.VisualBasic.dll'),
     (Join-Path $frameworkRoot 'System.Net.Http.dll'),
     (Join-Path $frameworkRoot 'System.Web.Extensions.dll'),
     (Join-Path $frameworkRoot 'System.Xml.dll'),

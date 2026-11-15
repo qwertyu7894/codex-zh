@@ -20,9 +20,11 @@ namespace CodexZhLauncher
             }
         }
 
+        public static string ConfigDirectory { get { return Path.Combine(UserProfile, ".codex"); } }
+
         public static string Root
         {
-            get { return Path.Combine(UserProfile, ".codex", "codex-zh"); }
+            get { return Path.Combine(ConfigDirectory, "codex-zh"); }
         }
 
         public static string AppDir { get { return Path.Combine(Root, "app"); } }
