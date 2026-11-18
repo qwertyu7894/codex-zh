@@ -26,3 +26,38 @@ macos/.artifacts/
 credentials*
 secrets*
 auth.json
+
+# ---------------------------------------------------------------
+# 禁止上传：只允许工程性内容进 GitHub
+#
+# 规则：仓库里只放源码、构建/测试脚本、发布流程文档，以及给用户看的
+# README/CHANGELOG/LICENSE。
+#
+# 以下内容一律**不得**提交，只保留在本地：
+#   · Agent 交接文档（AGENTS.md / PROJECT_INDEX.md / NOW.md / MAP.md /
+#     RUNBOOK.md / DECISIONS.md / RISKS.md / history/）
+#   · Agent 记忆（memory/、MEMORY.md、*.memory.md）
+#   · 排障记录、审计报告、内部问题单（ISSUE-*.md、*audit*.md 等）
+#   · 含本机路径、客户信息、日志样本的临时笔记
+# ---------------------------------------------------------------
+AGENTS.md
+PROJECT_INDEX.md
+NOW.md
+MAP.md
+RUNBOOK.md
+DECISIONS.md
+RISKS.md
+history/
+
+# Agent 记忆
+memory/
+MEMORY.md
+*.memory.md
+
+# 内部排障 / 审计 / 问题单
+ISSUE-*.md
+AUDIT-*.md
+*audit*.md
+NOTES.md
+TODO.md
+SCRATCH.md
