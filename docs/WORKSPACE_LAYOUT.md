@@ -17,6 +17,7 @@
 
 - `README.md`：用户和维护者说明。
 - `CLAUDE.md`：项目开发规则；修改启动流程前必须遵守“有本地化副本时优先走副本”。
+  该文件与其它 Agent 规则/交接文档只在本地保留，不纳入版本控制。
 - `CHANGELOG.md`：当前分支更新记录。
 - `docs/PUBLISHING.md`、`docs/VERSIONING.md`：发布流程和版本规则。
 - `scripts/`：构建辅助、打包和发布脚本。
